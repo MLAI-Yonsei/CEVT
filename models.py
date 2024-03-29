@@ -714,7 +714,7 @@ class MLP(nn.Module):
         return self.layers(x)
 
 class customTransformerEncoder(TransformerEncoder):
-    def __init__(self, encoder_layer, num_layers, d_model, drop_out, pred_layers=1, norm=None, enable_nested_tensor=True, mask_check=True, seq_wise=False, residual_t=False, residual_x = False):
+    def __init__(self, encoder_layer, num_layers, d_model, pred_layers=1, norm=None, enable_nested_tensor=True, mask_check=True, seq_wise=False, residual_t=False, residual_x = False):
         super().__init__(encoder_layer, num_layers, norm, enable_nested_tensor, mask_check)
         self.x2t = MLP(d_model,d_model//2, 1, num_layers=pred_layers) # Linear
         self.t_emb = MLP(1,d_model//2, d_model, num_layers=pred_layers) # Linear
@@ -881,7 +881,7 @@ class CETransformer(nn.Module):
         self.embedding = CEVAEEmbedding(output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= shift, use_treatment=use_treatment)
         # self.pos_encoder = PositionalEncoding(d_model, dropout)
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
-        self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, drop_out=dropout, pred_layers=pred_layers, seq_wise=seq_wise, residual_t=residual_t, residual_x=residual_x)
+        self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, seq_wise=seq_wise, residual_t=residual_t, residual_x=residual_x)
         # self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
 
         # Vairatioanl Z
