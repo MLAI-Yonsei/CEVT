@@ -120,6 +120,12 @@ parser.add_argument(
 )
 
 parser.add_argument(
+    "--cet_transformer_layers",
+    type=int, default=4,
+    help="It has to be over 3 layers (default : 4)"
+)
+
+parser.add_argument(
     "--num_heads",
     type=int, default=2,
     help="Transformer model head num (default : 2)"
@@ -259,9 +265,9 @@ if args.model == 'transformer':
     
 if args.model == 'cet':
     model = models.CETransformer(d_model=args.num_features, nhead=args.num_heads, d_hid=args.hidden_dim, 
-                          nlayers=4 , dropout=args.drop_out, pred_layers=args.num_layers, shift=args.shift,
+                          nlayers=args.cet_transformer_layers , dropout=args.drop_out, pred_layers=args.num_layers, shift=args.shift,
                           unidir=args.unidir, is_variational=args.variational, use_treatment=args.use_treatment
-                          ,residual_t=args.residual_t, residual_x=args.residual_x).to(args.device) # TODO: Hard coded for transformer layers
+                          ,residual_t=args.residual_t, residual_x=args.residual_x).to(args.device) 
     print("use cet model")
     # args.use_treatment=True
    
@@ -379,7 +385,7 @@ for epoch in range(1, args.epochs + 1):
         tr_loss_y = tr_epoch_loss_y / concat_tr_num_data
         tr_eval_loss_d = tr_epoch_eval_loss_d / concat_tr_num_data
         tr_eval_loss_y = tr_epoch_eval_loss_y / concat_tr_num_data
-        tr_eval_loss_t = tr_epoch_eval_loss_t / concat_tr_num_data
+        tr_eval_loss_t = tr_epoch_eval_loss_t * 6 / concat_tr_num_data
         
         tr_pred_loss = tr_epoch_pred_loss / concat_tr_num_data
         tr_kl_loss = tr_epoch_kl_loss / concat_tr_num_data
@@ -414,7 +420,7 @@ for epoch in range(1, args.epochs + 1):
         # Calculate Epoch loss
         val_loss_d = val_epoch_loss_d / concat_val_num_data
         val_loss_y = val_epoch_loss_y / concat_val_num_data
-        val_loss_t = val_epoch_loss_t / concat_val_num_data
+        val_loss_t = val_epoch_loss_t * 6 / concat_val_num_data
         if args.eval_criterion == "RMSE":
             val_loss_d = math.sqrt(val_loss_d)
             val_loss_y = math.sqrt(val_loss_y)
@@ -449,7 +455,7 @@ for epoch in range(1, args.epochs + 1):
         # Calculate Epoch loss
         te_mae_loss_d = te_mae_epoch_loss_d / concat_te_num_data
         te_mae_loss_y = te_mae_epoch_loss_y / concat_te_num_data
-        te_mae_loss_t = te_mae_epoch_loss_t / concat_te_num_data
+        te_mae_loss_t = te_mae_epoch_loss_t * 6 / concat_te_num_data
         te_rmse_loss_d = math.sqrt(te_mse_epoch_loss_d / concat_te_num_data)
         te_rmse_loss_y = math.sqrt(te_mse_epoch_loss_y / concat_te_num_data)
 
@@ -519,13 +525,13 @@ for epoch in range(1, args.epochs + 1):
         "train/y": tr_loss_y,
         "train_eval/d": tr_eval_loss_d,
         "train_eval/y": tr_eval_loss_y,
-        "train_eval/t [norm]": tr_eval_loss_t,
+        "train_eval/t ": tr_eval_loss_t,
         "train_pred_loss": tr_pred_loss,
         "train_kld_loss" : tr_kl_loss,
         "train_reconstruction_loss": tr_recon_loss, 
         "concat/valid_d": val_loss_d_list[0],
         "concat/valid_y": val_loss_y_list[0],
-        "concat/valid_t [norm]": val_loss_t_list[0],
+        "concat/valid_t ": val_loss_t_list[0],
         "concat/test_total (mae)": test_mae_d_list[0] + test_mae_y_list[0],
         "concat/test_d (mae)": test_mae_d_list[0],
         "concat/test_y (mae)": test_mae_y_list[0],
@@ -551,11 +557,11 @@ for epoch in range(1, args.epochs + 1):
             wandb_log.update({
                 f"date_{i}/valid_d": val_loss_d_list[i],
                 f"date_{i}/valid_y": val_loss_y_list[i],
-                f"date_{i}/valid_t [norm]": val_loss_t_list[i],
+                f"date_{i}/valid_t ": val_loss_t_list[i],
                 f"date_{i}/test_total (mae)": test_mae_d_list[i] + test_mae_y_list[i],
                 f"date_{i}/test_d (mae)": test_mae_d_list[i],
                 f"date_{i}/test_y (mae)": test_mae_y_list[i],
-                f"date_{i}/test_t [norm] (mae)": test_mae_t_list[i],
+                f"date_{i}/test_t (mae)": test_mae_t_list[i],
                 f"date_{i}/test_total (rmse)": test_rmse_d_list[i] + test_rmse_y_list[i],
                 f"date_{i}/test_d (rmse)": test_rmse_d_list[i],
                 f"date_{i}/test_y (rmse)": test_rmse_y_list[i],
@@ -578,7 +584,7 @@ if args.ignore_wandb == False:
         wandb.run.summary[f"best_val_models {date_key}"] = best_val_models[i]
         wandb.run.summary[f"best_val_loss (d) {date_key}"] = best_val_loss_d[i]
         wandb.run.summary[f"best_val_loss (y) {date_key}"] = best_val_loss_y[i]
-        wandb.run.summary[f"best_val_loss (t) [norm] {date_key}"] = best_val_loss_t[i]
+        wandb.run.summary[f"best_val_loss (t) {date_key}"] = best_val_loss_t[i]
         wandb.run.summary[f"best_val_loss {date_key}"] = best_val_loss_d[i] + best_val_loss_y[i]
         wandb.run.summary[f"best_te_mae_loss (d) {date_key}"] = best_test_losses[i][0]
         wandb.run.summary[f"best_te_mae_loss (y) {date_key}"] = best_test_losses[i][1]
