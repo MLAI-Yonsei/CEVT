@@ -15,8 +15,8 @@ warnings.filterwarnings("ignore", "Converting mask without torch.bool dtype to b
 class MLPRegressor(nn.Module):
     def __init__(self, args):
         super().__init__()
-        input_size=args.num_features,
-        hidden_size=args.hidden_dim,
+        input_size=args.num_features
+        hidden_size=args.hidden_dim
         disable_embedding=args.disable_embedding
         self.num_layers = args.num_layers
         
@@ -722,8 +722,10 @@ class MLP(nn.Module):
 class customTransformerEncoder(TransformerEncoder):
     def __init__(self, encoder_layer, num_layers, d_model, pred_layers=1, norm=None, enable_nested_tensor=True, mask_check=True, residual_t=False, residual_x = False):
         super().__init__(encoder_layer, num_layers, norm, enable_nested_tensor, mask_check)
-        self.x2t = MLP(d_model,d_model//2, 1, num_layers=pred_layers) # Linear
-        self.t_emb = MLP(1,d_model//2, d_model, num_layers=pred_layers) # Linear
+        self.x2t1 = MLP(d_model,d_model//2, 1, num_layers=pred_layers) # Linear
+        self.xt12t2 = MLP(d_model,d_model//2, 1, num_layers=pred_layers) # Linear
+        self.t1_emb = MLP(1,d_model//2, d_model, num_layers=pred_layers) # Linear
+        self.t2_emb = MLP(1,d_model//2, d_model, num_layers=pred_layers) # Linear
         self.xt2yd = MLP(d_model,d_model//2, 2, num_layers=pred_layers) # Linear
         self.yd_emb = MLP(2,d_model//2, d_model, num_layers=pred_layers) # Linear
         self.residual_t = residual_t
@@ -833,13 +835,13 @@ class customTransformerEncoder(TransformerEncoder):
                     val_mask = torch.arange(output.size(1))[None, :].cuda() < val_len[:, None]
                     output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1) / val_mask.sum(1).unsqueeze(-1).float()
                     # output_emb = torch.mean(output, dim=1) # average
-                t_pred = self.x2t(output_emb) 
-                t_pred = torch.clamp(t_pred, 0, 1) # min-max normalized
-                t = t_pred if intervene_t == None else intervene_t
-                t_emb = self.t_emb(t)
+                t1_pred = self.x2t1(output_emb) 
+                t1_pred = torch.clamp(t1_pred, 0, 1) # min-max normalized
+                t1 = t1_pred if intervene_t == None else intervene_t
+                t1_emb = self.t1_emb(t1)
+                t1_res = t1_emb.clone()
                 x1_res = output_emb.clone()
-                t_res = t_emb.clone()
-                output = output + t_emb.unsqueeze(1)
+                output = output + t1_emb.unsqueeze(1)
             elif idx == 1:
                 # output = output + t_emb.unsqueeze(1)
                 if mask is not None:
@@ -850,23 +852,41 @@ class customTransformerEncoder(TransformerEncoder):
                     # output_emb = torch.mean(output, dim=1) # average
                 x2_res = output_emb.clone()
                 if self.residual_t:
-                    output_emb = output_emb + t_res
+                    output_emb = output_emb + t1_res
                 if self.residual_x:
                     output_emb = output_emb + x1_res
+                t2 = self.xt12t2(output_emb)
+                t2 = torch.clamp(t2, 0, 1)  # min-max normalized
+                t2_emb = self.t2_emb(t2)
+                t_res = t1_res + t2_emb.clone() # USE T1+T2 EMB AS RESIDUAL T EMB
+                output = output + t2_emb.unsqueeze(1)
+            elif idx == 2:
+                # output = output + t_emb.unsqueeze(1)
+                if mask is not None:
+                    output_emb = output[torch.arange(output.size(0)), val_idx] # uni dir last
+                else:
+                    val_mask = torch.arange(output.size(1))[None, :].cuda() < val_len[:, None]
+                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1) / val_mask.sum(1).unsqueeze(-1).float()
+                    # output_emb = torch.mean(output, dim=1) # average
+                x3_res = output_emb.clone()
+                if self.residual_t:
+                    output_emb = output_emb + t_res
+                if self.residual_x:
+                    output_emb = output_emb + x2_res
                 yd = self.xt2yd(output_emb)
                 yd = torch.clamp(yd, 0, 1)  # min-max normalized
                 yd_emb = self.yd_emb(yd)
                 output = output + yd_emb.unsqueeze(1)
-            elif idx == 2:
+            elif idx == 3:
                 if self.residual_x:
-                    output = output + x2_res.unsqueeze(1)
+                    output = output + x3_res.unsqueeze(1)
 
         if convert_to_nested:
             output = output.to_padded_tensor(0., src.size())
 
         if self.norm is not None:
             output = self.norm(output)
-        return output, t, yd
+        return output, (t1, t2), yd
 
 class CETransformer(nn.Module):
     def __init__(self, args):
@@ -906,9 +926,10 @@ class CETransformer(nn.Module):
 
         self.d_model = d_model
         
-        self.z2t = MLP(d_model, d_model//2, 1, num_layers=pred_layers) # Linear
-        self.t_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers) # Linear
-        self.zt2yd = MLP(d_model, d_model//2, 2, num_layers=pred_layers) # Linear
+        self.z2t = MLP(d_model, d_model//2, 1, num_layers=pred_layers)
+        self.t_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers)
+        self.zt2yd = MLP(d_model, d_model//2, 2, num_layers=pred_layers)
+        self.zt12t2 = MLP(d_model, d_model//2, 2, num_layers=pred_layers)
 
         self.linear_decoder = MLP(d_model, d_model, d_model, num_layers=1) # Linear
         # self.init_weights(1)
@@ -974,7 +995,7 @@ class CETransformer(nn.Module):
         
         # Z ------
         # CETransformer encoder
-        z, enc_t, enc_yd = self.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len)
+        z, (enc_t1, enc_t2), enc_yd = self.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len)
         if self.unidir:
             idx = val_len - 1
             z = z[torch.arange(z.size(0)), idx] # padding 이 아닌값에 해당하는 seq중 마지막 값 사용
@@ -996,11 +1017,13 @@ class CETransformer(nn.Module):
         # Baseline Transformer encoder
         # z = self.transformer_encoder(x, src_key_padding_mask=src_mask)
         
-        dec_t = self.z2t(z.squeeze())
-        t_emb = self.t_emb(dec_t)
+        dec_t1 = self.z2t(z.squeeze())
+        t1_emb = self.t1_emb(dec_t1)
+        dec_t2 = self.zt12t2(z.squeeze()+t1_emb)
+        t2_emb = self.t2_emb(dec_t2)
         
         # Linear Decoder
-        dec_yd = self.zt2yd(z.squeeze() + t_emb)
+        dec_yd = self.zt2yd(z.squeeze() + t1_emb + t2_emb)
         
         pos_embeddings = self.embedding.positional_embedding(diff_days.squeeze().long())
 
@@ -1034,7 +1057,7 @@ class CETransformer(nn.Module):
         # x = torch.where(torch.arange(x.size(1), device=x.device)[None, :] < val_len[:, None], x, torch.zeros_like(x))
         # x_recon = torch.where(torch.arange(x_recon.size(1), device=x_recon.device)[None, :] < val_len[:, None], x_recon, torch.zeros_like(x))
         
-        return x, x_recon, (enc_yd, enc_t), (dec_yd, dec_t), (z_mu, z_logvar)
+        return x, x_recon, (enc_yd, enc_t1, enc_t2), (dec_yd, dec_t1, dec_t2), (z_mu, z_logvar)
     
 # class PositionalEncoding(nn.Module):
 #     def __init__(self, d_model, dropout=0.5, max_len=5000):

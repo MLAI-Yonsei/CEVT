@@ -21,10 +21,8 @@ class Tabledata(Dataset):
         self.use_treatment = args.use_treatment
         # padding tensors
         self.diff_tensor = torch.zeros([124,1])
-        if args.use_treatment:
-            self.cont_tensor = torch.zeros([124,4])
-        else:
-            self.cont_tensor = torch.zeros([124,5])
+        self.cont_tensor = torch.zeros([124,4]) if args.use_treatment else torch.zeros([124,5])
+
         self.cat_tensor = torch.zeros([124,7])
         yd=[]
         for _, group in data.groupby('cluster'):
@@ -34,16 +32,14 @@ class Tabledata(Dataset):
         ## 데이터 전처리 ##
         # 연속 데이터 정규화 #
         for c in ["age", "dis", "danger", "CT_R", "CT_E"]:
-            if scale == 'minmax':
-                minmax_col(data, c)
-            elif scale =='normalization':
-                meanvar_col(data, c)
-        
+            # dis : 0~6
+            # danger : 3~11
+            minmax_col(data, c) if scale == 'minmax' else meanvar_col(data, c)
         # 정규화 데이터 역변환을 위한 값 저장 #
         if scale == 'minmax':
             self.a_y, self.b_y = minmax_col(yd,"y")
             self.a_d, self.b_d = minmax_col(yd,"d")
-        elif scale =='normalization':
+        elif scale =='meanvar':
             self.a_y, self.b_y = meanvar_col(yd, "y")
             self.a_d, self.b_d = meanvar_col(yd, "d")
 
@@ -51,13 +47,15 @@ class Tabledata(Dataset):
         self.cluster = data.iloc[:,0].values.astype('float32')
         
         if not binary_t:
-            self.dis = data['dis'].values.astype('float32')
+            self.treatment = data[['dis', 'danger']].values.astype('float32') if not args.single_treatment else data['dis'].values.astype('float32')
         else:
+            raise('do not use binary t')
             print("use binary t")
-            self.dis = (data['dis'].values >= 0.5).astype('float32')
+            self.treatment = (data['dis'].values >= 0.5).astype('float32')
             
         if args.use_treatment:
-            self.cont_X = data.iloc[:, 1:6].drop(columns=['dis']).values.astype('float32')
+            drop_col = ['dis'] if args.single_treatment else ['dis', 'danger']
+            self.cont_X = data.iloc[:, 1:6].drop(columns=drop_col).values.astype('float32')
         else:
             self.cont_X = data.iloc[:, 1:6].values.astype('float32')
         
@@ -108,47 +106,10 @@ class Tabledata(Dataset):
         cont_tensor_p = cont_tensor[:, :3]
         cont_tensor_c = cont_tensor[:, 3:]
         yd = self.yd[index]
-        dis = torch.mean(torch.tensor(self.dis[self.cluster == index]))
         
-        return cont_tensor_p, cont_tensor_c, cat_tensor_p, cat_tensor_c, data_len, yd, diff_tensor, dis
-    
-class CEVAEdataset():
-    def __init__(self, data, scale='minmax', t_type="multi"):
-        columns = ['cluster', 'dis', 'danger','age', 'CT_R', 'CT_E', 'gender', 'is_korean',
-           'primary case', 'job_idx', 'rep_idx', 'place_idx', 'add_idx', 'diff_days',
-           'y', 'd', 'cut_date']
-        data=data[columns]
-        yd=[]
-        for _, group in data.groupby('cluster'):
-            yd.append(group[['y', 'd']].tail(1))
-        yd = pd.concat(yd)
-
-        for c in ["age", "dis", "danger", "CT_R", "CT_E"]:
-            if scale == 'minmax':
-                minmax_col(data, c)
-            elif scale =='normalization':
-                meanvar_col(data, c)
+        treatment = torch.mean(torch.tensor(self.treatment[self.cluster == index]), dim=0) #dis/danger
         
-        if scale == 'minmax':
-            self.a_y, self.b_y = minmax_col(yd,"y")
-            self.a_d, self.b_d = minmax_col(yd,"d")
-        elif scale =='normalization':
-            self.a_y, self.b_y = meanvar_col(yd, "y")
-            self.a_d, self.b_d = meanvar_col(yd, "d")
-
-        self.x=torch.tensor(data.iloc[:,2:13].values).to(torch.float32)
-        self.y=torch.tensor(data.iloc[:,14:16].values).squeeze()
-        self.t=torch.tensor(data.iloc[:,1].values)
-        if t_type=="binary":
-            self.t = torch.where(self.t >= 0.5, torch.tensor(1), torch.tensor(0))
-        elif t_type=="multi":
-            self.t = self.t * 6
-    def get_data(self):
-        return self.x, self.y, self.t
-    
-    def get_rescale(self):
-        return self.a_y, self.b_y, self.a_d, self.b_d
-        
+        return cont_tensor_p, cont_tensor_c, cat_tensor_p, cat_tensor_c, data_len, yd, diff_tensor, treatment
 
 ## MinMax Scaling Functions ------------------------------------
 def minmax_col(data, name):

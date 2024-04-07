@@ -39,6 +39,7 @@ parser.add_argument(
 
 parser.add_argument("--filter_out_clip", action='store_true',
         help = "Filter out clamped data points when calculate causal effect (Default : False)")
+
 # Data ---------------------------------------------------------
 parser.add_argument(
     "--data_path",
@@ -78,6 +79,10 @@ parser.add_argument(
 parser.add_argument(
     "--use_treatment", action='store_true'
 )
+
+# parser.add_argument("--treatment_var", type=str, default='danger', choices=['dis, danger'], help="treatment variable")
+
+parser.add_argument('--single_treatment', action='store_true', help='use only <dis> variable as treatment (default false)')
 
 parser.add_argument('--shift', action='store_true', help='do not use treatment as feature (default false)')
 
