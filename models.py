@@ -13,17 +13,21 @@ from torch.nn.modules.transformer import _get_seq_len, _detect_is_causal_mask
 warnings.filterwarnings("ignore", "Converting mask without torch.bool dtype to bool")
 
 class MLPRegressor(nn.Module):
-    def __init__(self, args, input_size=128, hidden_size=64, num_layers=3, output_size=2, drop_out=0.0, disable_embedding=False):
+    def __init__(self, args):
         super().__init__()
-        self.num_layers = num_layers
+        input_size=args.num_features,
+        hidden_size=args.hidden_dim,
+        disable_embedding=args.disable_embedding
+        self.num_layers = args.num_layers
+        
         if disable_embedding:
             input_size = 12
         self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.layers = nn.ModuleList([nn.Linear(input_size, hidden_size, bias=True)])
-        for _ in range(num_layers - 2):
+        for _ in range(args.num_layers - 2):
             self.layers.append(nn.Linear(hidden_size, hidden_size, bias=True))
-        self.layers.append(nn.Linear(hidden_size, output_size, bias=True))
-        self.dropout = nn.Dropout(drop_out)
+        self.layers.append(nn.Linear(hidden_size, args.output_size, bias=True))
+        self.dropout = nn.Dropout(args.drop_out)
         
     def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days):
         x = self.embedding(cont_p, cont_c, cat_p, cat_c, len, diff_days)
@@ -35,12 +39,14 @@ class MLPRegressor(nn.Module):
         return x
 
 class LinearRegression(torch.nn.Module):
-    def __init__(self, args, input_size=128, out_channels=2, disable_embedding=False):
+    def __init__(self, args):
         super().__init__()
-        if disable_embedding:
+        input_size=args.num_features
+
+        if args.disable_embedding:
             input_size = 12
-        self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
-        self.linear1 = torch.nn.Linear(input_size, out_channels)
+        self.embedding = TableEmbedding(input_size, disable_embedding = args.disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        self.linear1 = torch.nn.Linear(input_size, args.output_size)
 
     def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days):
         x = self.embedding(cont_p, cont_c, cat_p, cat_c, len, diff_days)
@@ -57,21 +63,21 @@ class Transformer(nn.Module):
         drop_out : DropOut 정도
         disable_embedding : 연속 데이터 embedding 여부
     '''
-    def __init__(self, args, input_size, hidden_size, output_size, num_layers, num_heads, drop_out, disable_embedding):
+    def __init__(self, args):
         super(Transformer, self).__init__()
         
-        self.embedding = TableEmbedding(output_size=input_size, disable_embedding = disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
-        self.cls_token = nn.Parameter(torch.randn(1, 1, input_size))
+        self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
+        self.cls_token = nn.Parameter(torch.randn(1, 1, args.num_features))
         self.transformer_layer = nn.TransformerEncoderLayer(
-            d_model=input_size,
-            nhead=num_heads,
-            dim_feedforward=hidden_size, 
-            dropout=drop_out,
+            d_model=args.num_features,
+            nhead=args.num_heads,
+            dim_feedforward=args.hidden_dim, 
+            dropout=args.drop_out,
             batch_first=True,
             norm_first=True
         )
-        self.transformer_encoder = TransformerEncoder(self.transformer_layer, num_layers)
-        self.fc = nn.Linear(hidden_size, output_size)  
+        self.transformer_encoder = TransformerEncoder(self.transformer_layer, args.num_layers)
+        self.fc = nn.Linear(args.hidden_dim, args.output_size)  
 
         self.init_weights()
 
@@ -714,13 +720,12 @@ class MLP(nn.Module):
         return self.layers(x)
 
 class customTransformerEncoder(TransformerEncoder):
-    def __init__(self, encoder_layer, num_layers, d_model, pred_layers=1, norm=None, enable_nested_tensor=True, mask_check=True, seq_wise=False, residual_t=False, residual_x = False):
+    def __init__(self, encoder_layer, num_layers, d_model, pred_layers=1, norm=None, enable_nested_tensor=True, mask_check=True, residual_t=False, residual_x = False):
         super().__init__(encoder_layer, num_layers, norm, enable_nested_tensor, mask_check)
         self.x2t = MLP(d_model,d_model//2, 1, num_layers=pred_layers) # Linear
         self.t_emb = MLP(1,d_model//2, d_model, num_layers=pred_layers) # Linear
         self.xt2yd = MLP(d_model,d_model//2, 2, num_layers=pred_layers) # Linear
         self.yd_emb = MLP(2,d_model//2, d_model, num_layers=pred_layers) # Linear
-        self.seq_wise = seq_wise
         self.residual_t = residual_t
         self.residual_x = residual_x
 
@@ -864,24 +869,31 @@ class customTransformerEncoder(TransformerEncoder):
         return output, t, yd
 
 class CETransformer(nn.Module):
-    def __init__(self, d_model, nhead, d_hid, nlayers, pred_layers=1, dropout=0.5, shift=False ,seq_wise=False, unidir=False, is_variational=False, use_treatment=True, residual_t = False, residual_x = False):
+    def __init__(self, args):
         super(CETransformer, self).__init__()
-        self.shift = shift
-        self.unidir = unidir
-        self.is_variational = is_variational
-        if is_variational:
+        d_model=args.num_features
+        nhead=args.num_heads
+        d_hid=args.hidden_dim
+        nlayers=args.cet_transformer_layers
+        dropout=args.drop_out
+        pred_layers=args.num_layers
+        self.shift = args.shift
+        self.unidir = args.unidir
+        self.is_variational = args.variational
+        
+        if args.variational:
             print("variational z sampling")
         else:
             print("determinant z ")
             
-        if unidir:
+        if args.unidir:
             print("unidirectional attention applied")
         else:
             print("maxpool applied")
-        self.embedding = CEVAEEmbedding(output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= shift, use_treatment=use_treatment)
+        self.embedding = CEVAEEmbedding(output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
         # self.pos_encoder = PositionalEncoding(d_model, dropout)
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
-        self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, seq_wise=seq_wise, residual_t=residual_t, residual_x=residual_x)
+        self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
         # self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
 
         # Vairatioanl Z

@@ -3,6 +3,8 @@ IDX=0
 ## Coarse Search
 ## Cos Anneal
 run_group="double_resi_lambda_sch"
+for cutoff_dataset in 0 1 2 3 4 5 
+do
 for lr_init in 1e-2 1e-3 #1e-3 #5e-3 # best : 1e-2 
 do
 for wd in 1e-2 5e-3 1e-4 #1e-4 # best : 0.005
@@ -38,6 +40,7 @@ do
 for residual_x in "--residual_x" #""
 do
 CUDA_VISIBLE_DEVICES=${GPU_IDS[$IDX]} python main.py --model=cet \
+--cutoff_dataset=${cutoff_dataset} \
 --hidden_dim=${hidden_dim} \
 --optim=${optim} \
 --lr_init=${lr_init} \
@@ -67,6 +70,7 @@ if [ $IDX -eq 0 ]; then
 wait
 fi
 
+done
 done
 done
 done
