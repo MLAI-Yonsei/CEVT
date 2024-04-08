@@ -107,8 +107,7 @@ class Tabledata(Dataset):
         cont_tensor_c = cont_tensor[:, 3:]
         yd = self.yd[index]
         
-        treatment = torch.mean(torch.tensor(self.treatment[self.cluster == index]), dim=0) #dis/danger
-        
+        treatment = torch.mean(torch.tensor(self.treatment[self.cluster == index]), dim=0) # t1: dis|t2: danger
         return cont_tensor_p, cont_tensor_c, cat_tensor_p, cat_tensor_c, data_len, yd, diff_tensor, treatment
 
 ## MinMax Scaling Functions ------------------------------------
@@ -158,17 +157,13 @@ def train(args, data, model, optimizer, criterion, epoch, warmup_iter=0, lamb=0.
     optimizer.zero_grad()
     batch_num, cont_p, cont_c, cat_p, cat_c, len, y, diff_days, *t = data_load(data)
     out = model(cont_p, cont_c, cat_p, cat_c, len, diff_days)
-    eval_loss_t = None; pred_loss=0; kl_loss=0; recon_loss=0
+    eval_loss_t1 = None; eval_loss_t2 = None; pred_loss=0; kl_loss=0; recon_loss=0
     if use_treatment:
-        gt_t = t[0]
+        gt_t = t[0] # t1: dis|t2: danger
         # x, x_reconstructed, z_mu, z_logvar, enc_preds, dec_preds, warm_yd = out
         x, x_reconstructed, (enc_yd_pred, enc_t_pred), (dec_yd_pred, dec_t_pred), (z_mu, z_logvar) = out
         
-        # loss, *ind_losses = cevae_loss_function(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, t, y[:,0] , y[:,1],warm_yd ,criterion, aux_criterion, binary_t)
-                                              #x_reconstructed, x, enc_t_pred, enc_y_pred, enc_d_pred, dec_t_pred, dec_y_pred, dec_d_pred, z_mu, z_logvar, t, y , d, criterion, lamdas
-        
-        loss, *ind_losses = cetransformer_loss(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, gt_t.unsqueeze(1), y[:,0] , y[:,1], criterion, lambdas, val_len=len)
-        # loss, *ind_losses = cetransformer_loss(x_reconstructed, x, enc_t_pred, 0, 0, dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], None, None, t.unsqueeze(1), y[:,0] , y[:,1], criterion, lambdas)
+        loss, *ind_losses = cetransformer_loss(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, gt_t, y[:,0] , y[:,1], criterion, lambdas, val_len=len)
         
         # (warmup_loss_y, warmup_loss_d), (enc_loss_y, enc_loss_d), (dec_loss_y, dec_loss_d) = ind_losses
         (enc_loss_y, enc_loss_d), (dec_loss_y, dec_loss_d), (enc_loss_t, dec_loss_t), (pred_loss, kl_loss, recon_loss) = ind_losses
@@ -192,26 +187,30 @@ def train(args, data, model, optimizer, criterion, epoch, warmup_iter=0, lamb=0.
             enc_pred_y, enc_pred_d, gt_y, gt_d = reverse_scaling(scaling, enc_yd_pred, y, a_y, b_y, a_d, b_d)
             enc_eval_loss_y = eval_criterion(enc_pred_y, gt_y)
             enc_eval_loss_d = eval_criterion(enc_pred_d, gt_d)
-            enc_eval_loss_t = eval_criterion(enc_t_pred.squeeze(), gt_t)
+            enc_eval_loss_t1 = eval_criterion(enc_t_pred[:,0].squeeze(), gt_t[:,0])
+            enc_eval_loss_t2 = eval_criterion(enc_t_pred[:,1].squeeze(), gt_t[:,1])
             
             # dec loss
             dec_pred_y, dec_pred_d, gt_y, gt_d = reverse_scaling(scaling, dec_yd_pred, y, a_y, b_y, a_d, b_d)
             dec_eval_loss_y = eval_criterion(dec_pred_y, gt_y)
             dec_eval_loss_d = eval_criterion(dec_pred_d, gt_d)
-            dec_eval_loss_t = eval_criterion(dec_t_pred.squeeze(), gt_t)
+            dec_eval_loss_t1 = eval_criterion(dec_t_pred[:,0].squeeze(), gt_t[:,0])
+            dec_eval_loss_t2 = eval_criterion(dec_t_pred[:,1].squeeze(), gt_t[:,1])
             if enc_eval_loss_y + enc_eval_loss_d > dec_eval_loss_y + dec_eval_loss_d:
                 eval_loss_y, eval_loss_d = dec_eval_loss_y, dec_eval_loss_d
                 out = dec_yd_pred
                 loss_y = dec_loss_y
                 loss_d = dec_loss_d
-                eval_loss_t = enc_eval_loss_t
+                eval_loss_t1 = dec_eval_loss_t1
+                eval_loss_t2 = dec_eval_loss_t2
                 eval_model = "Decoder"
             else:
                 eval_loss_y, eval_loss_d = enc_eval_loss_y, enc_eval_loss_d
                 out = enc_yd_pred
                 loss_y = enc_loss_y
                 loss_d = enc_loss_d
-                eval_loss_t = dec_eval_loss_t
+                eval_loss_t1 = enc_eval_loss_t1
+                eval_loss_t2 = enc_eval_loss_t2
                 eval_model = "Encoder"
         else:
             if args.model == 'cet':
@@ -219,26 +218,28 @@ def train(args, data, model, optimizer, criterion, epoch, warmup_iter=0, lamb=0.
                 enc_pred_y, enc_pred_d, gt_y, gt_d = reverse_scaling(scaling, enc_yd_pred, y, a_y, b_y, a_d, b_d)
                 enc_eval_loss_y = eval_criterion(enc_pred_y, gt_y)
                 enc_eval_loss_d = eval_criterion(enc_pred_d, gt_d)
-                enc_eval_loss_t = None
+                enc_eval_loss_t1 = enc_eval_loss_t2 = None
                 
                 # dec loss
                 dec_pred_y, dec_pred_d, gt_y, gt_d = reverse_scaling(scaling, dec_yd_pred, y, a_y, b_y, a_d, b_d)
                 dec_eval_loss_y = eval_criterion(dec_pred_y, gt_y)
                 dec_eval_loss_d = eval_criterion(dec_pred_d, gt_d)
-                dec_eval_loss_t = None
+                dec_eval_loss_t1 = dec_eval_loss_t2 = None
                 if enc_eval_loss_y + enc_eval_loss_d > dec_eval_loss_y + dec_eval_loss_d:
                     eval_loss_y, eval_loss_d = dec_eval_loss_y, dec_eval_loss_d
                     out = dec_yd_pred
                     loss_y = dec_loss_y
                     loss_d = dec_loss_d
-                    eval_loss_t = enc_eval_loss_t
+                    eval_loss_t1 = dec_eval_loss_t1
+                    eval_loss_t2 = dec_eval_loss_t2
                     eval_model = "Decoder"
                 else:
                     eval_loss_y, eval_loss_d = enc_eval_loss_y, enc_eval_loss_d
                     out = enc_yd_pred
                     loss_y = enc_loss_y
                     loss_d = enc_loss_d
-                    eval_loss_t = dec_eval_loss_t
+                    eval_loss_t1 = enc_eval_loss_t1
+                    eval_loss_t2 = enc_eval_loss_t2
                     eval_model = "Encoder"
             else:
                 pred_y, pred_d, gt_y, gt_d = reverse_scaling(scaling, out, y, a_y, b_y, a_d, b_d)
@@ -251,7 +252,7 @@ def train(args, data, model, optimizer, criterion, epoch, warmup_iter=0, lamb=0.
     if not torch.isnan(loss):
         loss.backward()
         optimizer.step()
-        return loss_d.item(), loss_y.item(), batch_num, out, y, eval_loss_y, eval_loss_d, eval_model, eval_loss_t, (pred_loss, kl_loss, recon_loss)
+        return loss_d.item(), loss_y.item(), batch_num, out, y, eval_loss_y, eval_loss_d, eval_model, (eval_loss_t1, eval_loss_t2), (pred_loss, kl_loss, recon_loss)
     else:
         # return 0, batch_num, out, y
         raise ValueError("Loss raised nan.")
@@ -285,20 +286,23 @@ def valid(args, data, model, eval_criterion, scaling, a_y, b_y, a_d, b_d, use_tr
         enc_pred_y, enc_pred_d, gt_y, gt_d = reverse_scaling(scaling, enc_yd_pred, y, a_y, b_y, a_d, b_d)
         enc_loss_y = eval_criterion(enc_pred_y, gt_y)
         enc_loss_d = eval_criterion(enc_pred_d, gt_d)
-        enc_loss_t = eval_criterion(enc_t_pred.squeeze(), gt_t)
+        enc_loss_t1 = eval_criterion(enc_t_pred[:,0].squeeze(), gt_t[:,0])
+        enc_loss_t2 = eval_criterion(enc_t_pred[:,1].squeeze(), gt_t[:,1])
         
         # dec loss
         dec_pred_y, dec_pred_d, gt_y, gt_d = reverse_scaling(scaling, dec_yd_pred, y, a_y, b_y, a_d, b_d)
         dec_loss_y = eval_criterion(dec_pred_y, gt_y)
         dec_loss_d = eval_criterion(dec_pred_d, gt_d)
-        dec_loss_t = eval_criterion(dec_t_pred.squeeze(), gt_t)
+        # dec_loss_t = eval_criterion(dec_t_pred.squeeze(), gt_t)
+        dec_loss_t1 = eval_criterion(dec_t_pred[:,0].squeeze(), gt_t[:,0])
+        dec_loss_t2 = eval_criterion(dec_t_pred[:,1].squeeze(), gt_t[:,1])
 
         if enc_loss_y + enc_loss_d > dec_loss_y + dec_loss_d:
-            loss_y, loss_d, loss_t = dec_loss_y, dec_loss_d, dec_loss_t
+            loss_y, loss_d, loss_t1, loss_t2 = dec_loss_y, dec_loss_d, dec_loss_t1, dec_loss_t2
             out = dec_yd_pred
             eval_model = "Decoder"
         else:
-            loss_y, loss_d, loss_t = enc_loss_y, enc_loss_d, enc_loss_t
+            loss_y, loss_d, loss_t1, loss_t2 = enc_loss_y, enc_loss_d, enc_loss_t1, enc_loss_t2
             out = enc_yd_pred
             eval_model = "Encoder"
     else:
@@ -319,11 +323,11 @@ def valid(args, data, model, eval_criterion, scaling, a_y, b_y, a_d, b_d, use_tr
             dec_loss_t = None
 
             if enc_loss_y + enc_loss_d > dec_loss_y + dec_loss_d:
-                loss_y, loss_d, loss_t = dec_loss_y, dec_loss_d, dec_loss_t
+                loss_y, loss_d, loss_t1, loss_t2 = dec_loss_y, dec_loss_d, dec_loss_t1, dec_loss_t2
                 out = dec_yd_pred
                 eval_model = "Decoder"
             else:
-                loss_y, loss_d, loss_t = enc_loss_y, enc_loss_d, enc_loss_t
+                loss_y, loss_d, loss_t1, loss_t2 = enc_loss_y, enc_loss_d, enc_loss_t1, enc_loss_t2
                 out = enc_yd_pred
                 eval_model = "Encoder"
         else:
@@ -336,7 +340,7 @@ def valid(args, data, model, eval_criterion, scaling, a_y, b_y, a_d, b_d, use_tr
     loss = loss_y + loss_d
     if not torch.isnan(loss):
         if use_treatment:
-            return loss_d.item(), loss_y.item(), batch_num, out, y, eval_model, loss_t
+            return loss_d.item(), loss_y.item(), batch_num, out, y, eval_model, loss_t1, loss_t2
         else:
             return loss_d.item(), loss_y.item(), batch_num, out, y, eval_model
     else:
@@ -374,21 +378,24 @@ def test(args, data, model, scaling, a_y, b_y, a_d, b_d, use_treatment=False, MC
         enc_pred_y, enc_pred_d, gt_y, gt_d = reverse_scaling(scaling, enc_yd_pred, y, a_y, b_y, a_d, b_d)
         enc_loss_y = criterion_mae(enc_pred_y, gt_y)
         enc_loss_d = criterion_mae(enc_pred_d, gt_d)
-        enc_loss_t = criterion_mae(enc_t_pred.squeeze(), gt_t)
+        enc_loss_t1 = criterion_mae(enc_t_pred[:,0].squeeze(), gt_t[:,0])
+        enc_loss_t2 = criterion_mae(enc_t_pred[:,1].squeeze(), gt_t[:,1])
         
         # dec loss
         dec_pred_y, dec_pred_d, gt_y, gt_d = reverse_scaling(scaling, dec_yd_pred, y, a_y, b_y, a_d, b_d)
         dec_loss_y = criterion_mae(dec_pred_y, gt_y)
         dec_loss_d = criterion_mae(dec_pred_d, gt_d)
-        dec_loss_t = criterion_mae(dec_t_pred.squeeze(), gt_t)
+        # dec_loss_t = criterion_mae(dec_t_pred.squeeze(), gt_t)
+        dec_loss_t1 = criterion_mae(dec_t_pred[:,0].squeeze(), gt_t[:,0])
+        dec_loss_t2 = criterion_mae(dec_t_pred[:,1].squeeze(), gt_t[:,1])
 
         if enc_loss_y + enc_loss_d > dec_loss_y + dec_loss_d:
-            mae_y, mae_d, loss_t = dec_loss_y, dec_loss_d, dec_loss_t
+            mae_y, mae_d, loss_t1, loss_t2 = dec_loss_y, dec_loss_d, dec_loss_t1, dec_loss_t2
             rmse_y, rmse_d = criterion_rmse(dec_pred_y, gt_y), criterion_rmse(dec_pred_d, gt_d)
             out = dec_yd_pred
             eval_model = "Decoder"
         else:
-            mae_y, mae_d, loss_t = enc_loss_y, enc_loss_d, enc_loss_t
+            mae_y, mae_d, loss_t1, loss_t2 = enc_loss_y, enc_loss_d, enc_loss_t1, enc_loss_t2
             rmse_y, rmse_d = criterion_rmse(enc_pred_y, gt_y), criterion_rmse(enc_pred_d, gt_d)
             out = enc_yd_pred
             eval_model = "Encoder"
@@ -422,12 +429,12 @@ def test(args, data, model, scaling, a_y, b_y, a_d, b_d, use_treatment=False, MC
             dec_loss_t = None
 
             if enc_loss_y + enc_loss_d > dec_loss_y + dec_loss_d:
-                mae_y, mae_d, loss_t = dec_loss_y, dec_loss_d, dec_loss_t
+                mae_y, mae_d, loss_t1, loss_t2 = dec_loss_y, dec_loss_d, dec_loss_t1, dec_loss_t2
                 rmse_y, rmse_d = criterion_rmse(dec_pred_y, gt_y), criterion_rmse(dec_pred_d, gt_d)
                 out = dec_yd_pred
                 eval_model = "Decoder"
             else:
-                mae_y, mae_d, loss_t = enc_loss_y, enc_loss_d, enc_loss_t
+                mae_y, mae_d, loss_t1, loss_t2 = enc_loss_y, enc_loss_d, enc_loss_t1, enc_loss_t2
                 rmse_y, rmse_d = criterion_rmse(enc_pred_y, gt_y), criterion_rmse(enc_pred_d, gt_d)
                 out = enc_yd_pred
                 eval_model = "Encoder"
@@ -452,17 +459,17 @@ def test(args, data, model, scaling, a_y, b_y, a_d, b_d, use_treatment=False, MC
     
     if not torch.isnan(mae) and not torch.isnan(rmse):
         if use_treatment:
-            return mae_d.item(), mae_y.item(), rmse_d.item(), rmse_y.item(), batch_num, out, y, loss_t
+            return mae_d.item(), mae_y.item(), rmse_d.item(), rmse_y.item(), batch_num, out, y, loss_t1, loss_t2
         else:
             return mae_d.item(), mae_y.item(), rmse_d.item(), rmse_y.item(), batch_num, out, y
     else:
         return 0, batch_num, out, y
 
 @torch.no_grad()
-def CE(args, model, dataloader):
+def CE(args, model, dataloader, intervene_var):
     model.eval()  
     data_points_y = []; data_points_d=[]
-
+    
     for data in dataloader:
         _, cont_p, cont_c, cat_p, cat_c, val_len, y, diff_days, *rest = data_load(data)
         gt_t = rest[0]
@@ -480,22 +487,27 @@ def CE(args, model, dataloader):
                 # _, original_t, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len)
 
                 # use ground truth t instead of x2t_pred
-                original_t = gt_t.unsqueeze(1)
-                _, _, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=original_t)
+                original_t = gt_t[:,0].unsqueeze(1) if intervene_var == 't1' else gt_t[:,1].unsqueeze(1)
+                _, _, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=("t1",original_t))
                 
                 saved_original_t = original_t.clone()
                 saved_original_enc_yd = original_enc_yd.clone()
                 
-                for intervene_t_value in [x * 0.1 for x in range(0, 61)]:
+                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                     original_t=saved_original_t.clone()
                     original_enc_yd=saved_original_enc_yd.clone()
                     
-                    intervene_t_value = intervene_t_value / 6 # normalize
+                    if intervene_var == 't1':
+                        intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    elif intervene_var == 't2':
+                        intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+
                     
                     # intervene_t를 배치 크기와 같은 텐서로 생성
                     intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
                     # 이제 intervene_t를 모델에 전달
-                    _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=intervene_t)
+                    _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=("t1",intervene_t))
                     
                     # if args.filter_out_clip:
                     #     cond_original_enc_yd = (original_enc_yd == 0) | (original_enc_yd == 1)
@@ -518,8 +530,10 @@ def CE(args, model, dataloader):
                     #     intervene_t = intervene_t[~exclude_indices]
                         
                     delta_y = original_enc_yd - intervene_enc_yd
-                    delta_t = (original_t - intervene_t)*6  # denormalize 
-                    
+                    if intervene_var == 't1':
+                        delta_t = (original_t - intervene_t)*6  # denormalize 
+                    elif intervene_var == 't2':
+                        delta_t = (original_t - intervene_t)*8  # +3 denormalize                
                     delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
             
                     for i in range(delta_y.size(0)):
@@ -527,9 +541,7 @@ def CE(args, model, dataloader):
                         data_points_d.append((delta_t[i].item(), delta_d[i].item()))
                 
         else:
-            print(f"intervene t feature for {args.model}")
-            
-            original_t = cont_c[:,:,0].clone()
+            original_t = cont_c[:,:,0].clone() if intervene_var=='t1' else cont_c[:,:,1].clone()
             if args.model == 'cet':
                 _, _, (original_yd, _), (_, _), (_, _) = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
             else:
@@ -537,13 +549,16 @@ def CE(args, model, dataloader):
             
             original_yd = torch.clamp(original_yd, 0, 1)
             
-            # intervene_t를 모든 가능한 t 로 설정
-            for intervene_t_value in range(7):  # 모든 가능한 t 값에 대해 반복
-                intervene_t_value = intervene_t_value / 6 # normalize
+            intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+            for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                 
-                # same_indices = cont_c[:,:,0] != intervene_t_value
-                # cont_c[:,:,0][same_indices] = intervene_t_value
-                cont_c[:,:,0] = intervene_t_value # TODO : have to check
+                if intervene_var == 't1':
+                    intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    cont_c[:,:,0] = intervene_t_value 
+                elif intervene_var == 't2':
+                    intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,1] = intervene_t_value 
+        
                 # 이제 intervene_t를 모델에 전달 
                 intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                 
@@ -551,18 +566,17 @@ def CE(args, model, dataloader):
                 intervene_yd = torch.clamp(intervene_yd, 0, 1)
                 
                 delta_y = original_yd - intervene_yd
-                delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                if intervene_var == 't1':
+                    delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                elif intervene_var == 't2':
+                    delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
                 
                 delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
         
                 for i in range(delta_y.size(0)):
                     data_points_y.append((delta_t[i].item(), delta_y[i].item()))
                     data_points_d.append((delta_t[i].item(), delta_d[i].item()))
-                # y_treatment_effect = delta_y / delta_t.squeeze() 
-                # d_treatment_effect = delta_d / delta_t.squeeze() 
-                
-                # y_treatment_effects.append(torch.nanmean(y_treatment_effect, dim=0).item())
-                # d_treatment_effects.append(torch.nanmean(d_treatment_effect, dim=0).item())
     
     def calculate_gradients_and_effect(data_points, method='coef'):
         # 데이터 변환
@@ -600,8 +614,8 @@ def data_load(data):
     # Move all tensors in the data tuple to GPU at once
     data = tuple(tensor.cuda() for tensor in data)
     
-    cont_p, cont_c, cat_p, cat_c, len, y, diff_days, *dis = data
-    return cont_p.shape[0], cont_p, cont_c, cat_p, cat_c, len, y, diff_days, dis[0]
+    cont_p, cont_c, cat_p, cat_c, len, y, diff_days, *t = data
+    return cont_p.shape[0], cont_p, cont_c, cat_p, cat_c, len, y, diff_days, t[0]
 
 def reverse_scaling(scaling, out, y, a_y, b_y, a_d, b_d):
     '''
@@ -806,12 +820,15 @@ def cetransformer_loss(x_reconstructed, x,
             lambdas,
             t_loss=True,
             val_len=None):
+    
     # Encoder Prediction Loss
     enc_y_loss = criterion(enc_y_pred, y)
     enc_d_loss = criterion(enc_d_pred, d)
-    if t_loss:
-        enc_t_loss = criterion(enc_t_pred, t)
-        enc_loss = enc_y_loss + enc_d_loss + enc_t_loss
+    if t_loss: # t1: dis|t2: danger
+        # enc_t_loss = criterion(enc_t_pred, t)
+        enc_t1_loss = criterion(enc_t_pred[:, 0], t[:, 0])
+        enc_t2_loss = criterion(enc_t_pred[:, 1], t[:, 1])
+        enc_loss = enc_y_loss + enc_d_loss + enc_t1_loss + enc_t2_loss # + enc_t_loss
     else:
         enc_t_loss = None
         enc_loss = enc_y_loss + enc_d_loss
@@ -819,9 +836,11 @@ def cetransformer_loss(x_reconstructed, x,
     # Decoder Prediction Loss
     dec_y_loss = criterion(dec_y_pred, y)
     dec_d_loss = criterion(dec_d_pred, d)
-    if t_loss:
-        dec_t_loss = criterion(dec_t_pred, t)
-        dec_loss = dec_y_loss + dec_d_loss + dec_t_loss
+    if t_loss: # t1: dis|t2: danger
+        # dec_t_loss = criterion(dec_t_pred, t)
+        dec_t1_loss = criterion(dec_t_pred[:, 0], t[:, 0])
+        dec_t2_loss = criterion(dec_t_pred[:, 1], t[:, 1])
+        dec_loss = dec_y_loss + dec_d_loss + dec_t1_loss + dec_t2_loss # + dec_t_loss
     else:
         dec_t_loss = None
         dec_loss = dec_y_loss + dec_d_loss
@@ -851,7 +870,7 @@ def cetransformer_loss(x_reconstructed, x,
 
     total_loss = lambdas[0]*pred_loss + lambdas[1]*kl_loss + lambdas[2]*recon_loss
     # total_loss = lambdas[0]*enc_y_loss + lambdas[1]*enc_d_loss #+ lambdas[2]*recon_loss
-    return total_loss, (enc_y_loss, enc_d_loss), (dec_y_loss, dec_d_loss), (enc_t_loss, dec_t_loss), (pred_loss, kl_loss, recon_loss)
+    return total_loss, (enc_y_loss, enc_d_loss), (dec_y_loss, dec_d_loss), ((enc_t1_loss, enc_t2_loss), (dec_t1_loss, dec_t2_loss)), (pred_loss, kl_loss, recon_loss)
 
 def sigmoid_annealing(epoch, total_epochs, k=1.0, x0=0.5):
     """Calculate the sigmoid annealing value for lambda.

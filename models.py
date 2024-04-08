@@ -837,7 +837,8 @@ class customTransformerEncoder(TransformerEncoder):
                     # output_emb = torch.mean(output, dim=1) # average
                 t1_pred = self.x2t1(output_emb) 
                 t1_pred = torch.clamp(t1_pred, 0, 1) # min-max normalized
-                t1 = t1_pred if intervene_t == None else intervene_t
+                t1 = intervene_t[1] if intervene_t != None and intervene_t[0]=='t1' else t1_pred
+
                 t1_emb = self.t1_emb(t1)
                 t1_res = t1_emb.clone()
                 x1_res = output_emb.clone()
@@ -855,8 +856,9 @@ class customTransformerEncoder(TransformerEncoder):
                     output_emb = output_emb + t1_res
                 if self.residual_x:
                     output_emb = output_emb + x1_res
-                t2 = self.xt12t2(output_emb)
-                t2 = torch.clamp(t2, 0, 1)  # min-max normalized
+                t2_pred = self.xt12t2(output_emb)
+                t2_pred = torch.clamp(t2_pred, 0, 1)  # min-max normalized
+                t2 = intervene_t[1] if intervene_t != None and intervene_t[0]=='t2' else t2_pred
                 t2_emb = self.t2_emb(t2)
                 t_res = t1_res + t2_emb.clone() # USE T1+T2 EMB AS RESIDUAL T EMB
                 output = output + t2_emb.unsqueeze(1)
@@ -886,6 +888,7 @@ class customTransformerEncoder(TransformerEncoder):
 
         if self.norm is not None:
             output = self.norm(output)
+        
         return output, (t1, t2), yd
 
 class CETransformer(nn.Module):
@@ -927,9 +930,10 @@ class CETransformer(nn.Module):
         self.d_model = d_model
         
         self.z2t = MLP(d_model, d_model//2, 1, num_layers=pred_layers)
-        self.t_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers)
+        self.t1_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers)
+        self.t2_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers)
+        self.zt12t2 = MLP(d_model, d_model//2, 1, num_layers=pred_layers)
         self.zt2yd = MLP(d_model, d_model//2, 2, num_layers=pred_layers)
-        self.zt12t2 = MLP(d_model, d_model//2, 2, num_layers=pred_layers)
 
         self.linear_decoder = MLP(d_model, d_model, d_model, num_layers=1) # Linear
         # self.init_weights(1)
@@ -1057,7 +1061,7 @@ class CETransformer(nn.Module):
         # x = torch.where(torch.arange(x.size(1), device=x.device)[None, :] < val_len[:, None], x, torch.zeros_like(x))
         # x_recon = torch.where(torch.arange(x_recon.size(1), device=x_recon.device)[None, :] < val_len[:, None], x_recon, torch.zeros_like(x))
         
-        return x, x_recon, (enc_yd, enc_t1, enc_t2), (dec_yd, dec_t1, dec_t2), (z_mu, z_logvar)
+        return x, x_recon, (enc_yd, torch.cat([enc_t1, enc_t2], dim=1)), (dec_yd, torch.cat([dec_t1, dec_t2], dim=1)), (z_mu, z_logvar)
     
 # class PositionalEncoding(nn.Module):
 #     def __init__(self, d_model, dropout=0.5, max_len=5000):

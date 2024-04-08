@@ -77,7 +77,7 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--use_treatment", action='store_true'
+    "--use_treatment", action='store_true', help='If True, use treatment as x feature'
 )
 
 # parser.add_argument("--treatment_var", type=str, default='danger', choices=['dis, danger'], help="treatment variable")
@@ -204,11 +204,16 @@ parser.add_argument("--t_max", type=int, default=200,
 
 parser.add_argument("--lambdas", nargs='+', type=float, default=[1.0, 1.0, 1.0], help='pred loss + kld loss + recon loss')
 
-parser.add_argument("--sig_x0", type=float, default=0.25)
+parser.add_argument("--sig_x0", type=float, default=0.75)
 #----------------------------------------------------------------
 
 parser.add_argument("--lamb", type=float, default=0.0,
                 help="Penalty term for Ridge Regression (Default : 0)")
+
+parser.add_argument(
+    "--intervene_var",
+    type=str, default='t1', choices=["t1", "t2"],
+    help="Intervention variable for Causal Effect Estimation (default : t1)")
 
 args = parser.parse_args()
 ## ----------------------------------------------------------------------------------------------------
@@ -251,7 +256,8 @@ if args.model == 'transformer':
     
 if args.model == 'cet':
     model = models.CETransformer(args).to(args.device) 
-    print("use cet model")
+    print("change use treatmetn as True, which means do not use treatment as x feature")
+    args.use_treatment = True
 
 elif args.model == "mlp":
     model = models.MLPRegressor(args=args).to(args.device)
@@ -306,7 +312,7 @@ columns = ["ep", "lr", f"tr_loss_d({args.eval_criterion})", f"tr_loss_y({args.ev
 ## print table index, 0 = cocnated data
 cutdates_num=0
 best_epochs=[0] * (cutdates_num+1) 
-best_val_loss_d = [9999] * (cutdates_num+1); best_val_loss_y = [9999] * (cutdates_num+1); best_val_loss_t = [9999] * (cutdates_num+1)
+best_val_loss_d = [9999] * (cutdates_num+1); best_val_loss_y = [9999] * (cutdates_num+1); best_val_loss_t1 = [9999] * (cutdates_num+1); best_val_loss_t2 = [9999] * (cutdates_num+1)
 best_val_models = [""] * (cutdates_num+1); best_tr_models = [""] * (cutdates_num+1)
 best_test_losses = [[9999 for j in range(4)] for i in range(cutdates_num+1)]
 tr_eval_model=None; tr_eval_loss_d=None; tr_eval_loss_y=None; tr_eval_loss_t=None
@@ -318,7 +324,7 @@ if args.eval_model != None:
 lambda0 = args.lambdas[1]
 for epoch in range(1, args.epochs + 1):
     lr = optimizer.param_groups[0]['lr']
-    tr_epoch_eval_loss_d=0; tr_epoch_eval_loss_y=0; tr_epoch_eval_loss_t=0; tr_epoch_loss_d = 0; tr_epoch_loss_y = 0; val_epoch_loss_d = 0; val_epoch_loss_y = 0; val_epoch_loss_t = 0; te_mae_epoch_loss_d = 0; te_mae_epoch_loss_y = 0; te_mae_epoch_loss_t = 0; te_mse_epoch_loss_d = 0; te_mse_epoch_loss_y = 0; te_mse_epoch_loss_t = 0
+    tr_epoch_eval_loss_d=0; tr_epoch_eval_loss_y=0; tr_epoch_eval_loss_t1=0; tr_epoch_eval_loss_t2=0; tr_epoch_loss_d = 0; tr_epoch_loss_y = 0; val_epoch_loss_d = 0; val_epoch_loss_y = 0; val_epoch_loss_t1 = 0; val_epoch_loss_t2 = 0; te_mae_epoch_loss_d = 0; te_mae_epoch_loss_y = 0; te_mae_epoch_loss_t1 = 0; te_mae_epoch_loss_t2 = 0; te_mse_epoch_loss_d = 0; te_mse_epoch_loss_y = 0; te_mse_epoch_loss_t1 = 0; te_mse_epoch_loss_t2 = 0
     tr_epoch_pred_loss=0; tr_epoch_kl_loss=0; tr_epoch_recon_loss=0
     
     concat_tr_num_data = 0; concat_val_num_data = 0; concat_te_num_data = 0
@@ -340,8 +346,10 @@ for epoch in range(1, args.epochs + 1):
             tr_epoch_loss_y += tr_batch_loss_y
             tr_epoch_eval_loss_d += tr_eval_loss_d
             tr_epoch_eval_loss_y += tr_eval_loss_y
-            if args.use_treatment:            
-                tr_epoch_eval_loss_t += indv_loss[0]
+            if args.use_treatment:     
+                tr_eval_loss_t1, tr_eval_loss_t2 = indv_loss[0]       
+                tr_epoch_eval_loss_t1 += tr_eval_loss_t1     
+                tr_epoch_eval_loss_t2 += tr_eval_loss_t2
             
             tr_epoch_pred_loss += indv_loss[1][0]
             tr_epoch_kl_loss += indv_loss[1][1]
@@ -359,7 +367,8 @@ for epoch in range(1, args.epochs + 1):
         tr_loss_y = tr_epoch_loss_y / concat_tr_num_data
         tr_eval_loss_d = tr_epoch_eval_loss_d / concat_tr_num_data
         tr_eval_loss_y = tr_epoch_eval_loss_y / concat_tr_num_data
-        tr_eval_loss_t = tr_epoch_eval_loss_t * 6 / concat_tr_num_data
+        tr_eval_loss_t1 = tr_epoch_eval_loss_t1 * 6 / concat_tr_num_data       # denorm
+        tr_eval_loss_t2 = (tr_epoch_eval_loss_t2 * 8 + 3) / concat_tr_num_data # denorm
         
         tr_pred_loss = tr_epoch_pred_loss / concat_tr_num_data
         tr_kl_loss = tr_epoch_kl_loss / concat_tr_num_data
@@ -371,8 +380,8 @@ for epoch in range(1, args.epochs + 1):
         # ---------------------------------------------------------------------------------------
     
     val_output=[]; test_output=[]
-    val_loss_d_list = []; val_loss_y_list = [] ; val_loss_t_list = []
-    test_mae_d_list = []; test_mae_y_list = [] ; test_mae_t_list = [] ; test_rmse_d_list = []; test_rmse_y_list = []
+    val_loss_d_list = []; val_loss_y_list = [] ; val_loss_t1_list = []; val_loss_t2_list = []
+    test_mae_d_list = []; test_mae_y_list = [] ; test_mae_t1_list = [] ; test_mae_t2_list = [] ; test_rmse_d_list = []; test_rmse_y_list = []
     ## Validation Phase ----------------------------------------------------------------------
     for itr, data in enumerate(val_dataloader):
         val_batch_loss_d, val_batch_loss_y, val_num_data, val_predicted, val_ground_truth, eval_model, *t_loss = utils.valid(args, data, model, eval_criterion,
@@ -381,7 +390,10 @@ for epoch in range(1, args.epochs + 1):
         val_epoch_loss_d += val_batch_loss_d
         val_epoch_loss_y += val_batch_loss_y
         if args.use_treatment:            
-            val_epoch_loss_t += t_loss[0]
+            val_loss_t1, val_loss_t2 = t_loss[0], t_loss[1]       
+            val_epoch_loss_t1 += val_loss_t1     
+            val_epoch_loss_t2 += val_loss_t2
+            # val_epoch_loss_t += t_loss[0]
         concat_val_num_data += val_num_data
 
         # val_pred_y_list += list(val_predicted[:,0].cpu().detach().numpy())
@@ -392,7 +404,8 @@ for epoch in range(1, args.epochs + 1):
     # Calculate Epoch loss
     val_loss_d = val_epoch_loss_d / concat_val_num_data
     val_loss_y = val_epoch_loss_y / concat_val_num_data
-    val_loss_t = val_epoch_loss_t * 6 / concat_val_num_data
+    val_loss_t1 = val_epoch_loss_t1 * 6 / concat_val_num_data
+    val_loss_t2 = (val_epoch_loss_t2 * 8 + 3) / concat_val_num_data
     if args.eval_criterion == "RMSE":
         val_loss_d = math.sqrt(val_loss_d)
         val_loss_y = math.sqrt(val_loss_y)
@@ -400,7 +413,10 @@ for epoch in range(1, args.epochs + 1):
     # save list for all cut-off dates
     val_loss_d_list.append(val_loss_d)
     val_loss_y_list.append(val_loss_y)
-    val_loss_t_list.append(val_loss_t)
+    # val_loss_t_list.append(val_loss_t)
+    val_loss_t1_list.append(val_loss_t1)
+    val_loss_t2_list.append(val_loss_t2)
+    
     # ---------------------------------------------------------------------------------------
 
     ## Test Phase ----------------------------------------------------------------------
@@ -411,7 +427,11 @@ for epoch in range(1, args.epochs + 1):
         te_mae_epoch_loss_d += te_mae_batch_loss_d
         te_mae_epoch_loss_y += te_mae_batch_loss_y
         if args.use_treatment:
-            te_mae_epoch_loss_t += t_loss[0]
+            # te_mae_epoch_loss_t += t_loss[0]
+            te_loss_t1, te_loss_t2 = t_loss[0], t_loss[1]      
+            te_mae_epoch_loss_t1 += te_loss_t1     
+            te_mae_epoch_loss_t2 += te_loss_t2
+            
         te_mse_epoch_loss_d += te_mse_batch_loss_d
         te_mse_epoch_loss_y += te_mse_batch_loss_y
         concat_te_num_data += te_num_data
@@ -427,22 +447,25 @@ for epoch in range(1, args.epochs + 1):
     # Calculate Epoch loss
     te_mae_loss_d = te_mae_epoch_loss_d / concat_te_num_data
     te_mae_loss_y = te_mae_epoch_loss_y / concat_te_num_data
-    te_mae_loss_t = te_mae_epoch_loss_t * 6 / concat_te_num_data
+    te_mae_loss_t1 = te_mae_epoch_loss_t1 * 6 / concat_te_num_data
+    te_mae_loss_t2 = (te_mae_epoch_loss_t2 * 8 + 3) / concat_te_num_data
     te_rmse_loss_d = math.sqrt(te_mse_epoch_loss_d / concat_te_num_data)
     te_rmse_loss_y = math.sqrt(te_mse_epoch_loss_y / concat_te_num_data)
 
     # save list for all cut-off dates
-    test_mae_d_list.append(te_mae_loss_d);test_mae_y_list.append(te_mae_loss_y); test_mae_t_list.append(te_mae_loss_t)
+    test_mae_d_list.append(te_mae_loss_d);test_mae_y_list.append(te_mae_loss_y); test_mae_t1_list.append(te_mae_loss_t1); test_mae_t2_list.append(te_mae_loss_t2)
     test_rmse_d_list.append(te_rmse_loss_d); test_rmse_y_list.append(te_rmse_loss_y)
 
     # ---------------------------------------------------------------------------------------
     
     # Save Best Model (Early Stopping)
+    i=0
     if val_loss_d + val_loss_y < best_val_loss_d[i] + best_val_loss_y[i]:
         best_epochs[i] = epoch
         best_val_loss_d[i] = val_loss_d
         best_val_loss_y[i] = val_loss_y
-        best_val_loss_t[i] = val_loss_t
+        best_val_loss_t1[i] = val_loss_t1
+        best_val_loss_t2[i] = val_loss_t2
 
         best_test_losses[i][0] = te_mae_loss_d
         best_test_losses[i][1] = te_mae_loss_y
@@ -454,13 +477,13 @@ for epoch in range(1, args.epochs + 1):
         
         best_model = model
         # save state_dict
-        os.makedirs(args.save_path, exist_ok=True)
-        os.makedirs(f"./best_model/seed_{args.seed}", exist_ok=True)
-        utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
-                            epoch = epoch,
-                            state_dict = model.state_dict(),
-                            optimizer = optimizer.state_dict(),
-                            )
+        # os.makedirs(args.save_path, exist_ok=True)
+        # os.makedirs(f"./best_model/seed_{args.seed}", exist_ok=True)
+        # utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
+        #                     epoch = epoch,
+        #                     state_dict = model.state_dict(),
+        #                     optimizer = optimizer.state_dict(),
+        #                     )
         if args.save_pred:
             # save prediction and ground truth as csv
             val_df = pd.DataFrame({'val_pred_y':val_pred_y_list,
@@ -503,11 +526,13 @@ for epoch in range(1, args.epochs + 1):
         "train_reconstruction_loss": tr_recon_loss, 
         "concat/valid_d": val_loss_d_list[0],
         "concat/valid_y": val_loss_y_list[0],
-        "concat/valid_t ": val_loss_t_list[0],
+        "concat/valid_t1 ": val_loss_t1_list[0],
+        "concat/valid_t2 ": val_loss_t2_list[0],
         "concat/test_total (mae)": test_mae_d_list[0] + test_mae_y_list[0],
         "concat/test_d (mae)": test_mae_d_list[0],
         "concat/test_y (mae)": test_mae_y_list[0],
-        "concat/test_t (mae)": test_mae_t_list[0],
+        "concat/test_t1 (mae)": test_mae_t1_list[0],
+        "concat/test_t2 (mae)": test_mae_t2_list[0],
         "concat/test_total (rmse)": test_rmse_d_list[0] + test_rmse_y_list[0],
         "concat/test_d (rmse)": test_rmse_d_list[0],
         "concat/test_y (rmse)": test_rmse_y_list[0],
@@ -529,11 +554,13 @@ for epoch in range(1, args.epochs + 1):
             wandb_log.update({
                 f"valid_d": val_loss_d_list[i],
                 f"valid_y": val_loss_y_list[i],
-                f"valid_t ": val_loss_t_list[i],
+                f"valid_t1 ": val_loss_t1_list[i],
+                f"valid_t2 ": val_loss_t2_list[i],
                 f"test_total (mae)": test_mae_d_list[i] + test_mae_y_list[i],
                 f"test_d (mae)": test_mae_d_list[i],
                 f"test_y (mae)": test_mae_y_list[i],
-                f"test_t (mae)": test_mae_t_list[i],
+                f"test_t1 (mae)": test_mae_t1_list[i],
+                f"test_t2 (mae)": test_mae_t2_list[i],
                 f"test_total (rmse)": test_rmse_d_list[i] + test_rmse_y_list[i],
                 f"test_d (rmse)": test_rmse_d_list[i],
                 f"test_y (rmse)": test_rmse_y_list[i],
@@ -543,7 +570,7 @@ for epoch in range(1, args.epochs + 1):
 # ---------------------------------------------------------------------------------------------
 
 # Estimate Population average treatment effects
-negative_acc_y, negative_acc_d, ce_y, ce_d = utils.CE(args, best_model, val_dataloader)
+negative_acc_y, negative_acc_d, ce_y, ce_d = utils.CE(args, best_model, val_dataloader, args.intervene_var)
 
 ## Print Best Model ---------------------------------------------------------------------------
 print(f"Best {args.model} achieved [d:{best_test_losses[args.table_idx][0]}, y:{best_test_losses[args.table_idx][1]}] on {best_epochs[args.table_idx]} epoch!!")
@@ -557,7 +584,8 @@ if args.ignore_wandb == False:
         wandb.run.summary[f"best_val_models {date_key}"] = best_val_models[i]
         wandb.run.summary[f"best_val_loss (d) {date_key}"] = best_val_loss_d[i]
         wandb.run.summary[f"best_val_loss (y) {date_key}"] = best_val_loss_y[i]
-        wandb.run.summary[f"best_val_loss (t) {date_key}"] = best_val_loss_t[i]
+        wandb.run.summary[f"best_val_loss (t1) {date_key}"] = best_val_loss_t1[i]
+        wandb.run.summary[f"best_val_loss (t2) {date_key}"] = best_val_loss_t2[i]
         wandb.run.summary[f"best_val_loss {date_key}"] = best_val_loss_d[i] + best_val_loss_y[i]
         wandb.run.summary[f"best_te_mae_loss (d) {date_key}"] = best_test_losses[i][0]
         wandb.run.summary[f"best_te_mae_loss (y) {date_key}"] = best_test_losses[i][1]
