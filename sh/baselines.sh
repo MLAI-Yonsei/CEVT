@@ -14,7 +14,7 @@ for model in "${models[@]}"; do
     for lr_init in 1e-3 1e-4 1e-2; do
         for wd in 1e-3 1e-4; do
             for drop_out in 0.0 0.1; do
-                for hidden_dim in 256; do
+                for hidden_dim in 128; do
                     for num_features in 128; do
                         for num_layers in 2 3; do
                             for num_heads in 4; do
