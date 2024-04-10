@@ -255,9 +255,8 @@ if args.model == 'transformer':
     model = models.Transformer(args).to(args.device)
     
 if args.model == 'cet':
+    assert(args.use_treatment == True)
     model = models.CETransformer(args).to(args.device) 
-    print("change use treatmetn as True, which means do not use treatment as x feature")
-    args.use_treatment = True
 
 elif args.model == "mlp":
     model = models.MLPRegressor(args=args).to(args.device)
@@ -570,7 +569,8 @@ for epoch in range(1, args.epochs + 1):
 # ---------------------------------------------------------------------------------------------
 
 # Estimate Population average treatment effects
-negative_acc_y, negative_acc_d, ce_y, ce_d = utils.CE(args, best_model, val_dataloader, args.intervene_var)
+negative_acc_y_t1, negative_acc_d_t1, ce_y_t1, ce_d_t1 = utils.CE(args, best_model, val_dataloader, 't1')
+negative_acc_y_t2, negative_acc_d_t2, ce_y_t2, ce_d_t2 = utils.CE(args, best_model, val_dataloader, 't2')
 
 ## Print Best Model ---------------------------------------------------------------------------
 print(f"Best {args.model} achieved [d:{best_test_losses[args.table_idx][0]}, y:{best_test_losses[args.table_idx][1]}] on {best_epochs[args.table_idx]} epoch!!")
@@ -594,11 +594,16 @@ if args.ignore_wandb == False:
         wandb.run.summary[f"best_te_rmse_loss (y) {date_key}"] = best_test_losses[i][3]
         wandb.run.summary[f"best_te_rmse_loss {date_key}"] = best_test_losses[i][2] + best_test_losses[i][3]
     
-    wandb.run.summary["CE_y"] = ce_y
-    wandb.run.summary["CE_d"] = ce_d
-    wandb.run.summary["CACC_y"] = negative_acc_y
-    wandb.run.summary["CACC_d"] = negative_acc_d
-    wandb.run.summary["CACC_avg"] = (negative_acc_y + negative_acc_d)/2
+    wandb.run.summary["CE_y (t1)"] = ce_y_t1
+    wandb.run.summary["CE_y (t2)"] = ce_y_t2
+    wandb.run.summary["CE_d (t1)"] = ce_d_t1
+    wandb.run.summary["CE_d (t2)"] = ce_d_t2
+    wandb.run.summary["CACC_y (t1)"] = negative_acc_y_t1
+    wandb.run.summary["CACC_y (t2)"] = negative_acc_y_t2
+    wandb.run.summary["CACC_d (t1)"] = negative_acc_d_t1
+    wandb.run.summary["CACC_d (t2)"] = negative_acc_d_t2
+    wandb.run.summary["CACC_avg (t1)"] = (negative_acc_y_t1 + negative_acc_d_t1)/2
+    wandb.run.summary["CACC_avg (t2)"] = (negative_acc_y_t2 + negative_acc_d_t2)/2
     wandb.run.summary["tr_dat_num"] = concat_tr_num_data
     # wandb.run.summary["val_dat_num"] : concat_val_num_data
     # wandb.run.summary["te_dat_num"] : concat_te_num_data

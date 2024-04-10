@@ -21,7 +21,13 @@ class Tabledata(Dataset):
         self.use_treatment = args.use_treatment
         # padding tensors
         self.diff_tensor = torch.zeros([124,1])
-        self.cont_tensor = torch.zeros([124,4]) if args.use_treatment else torch.zeros([124,5])
+        if args.use_treatment:
+            if not args.single_treatment:
+                self.cont_tensor = torch.zeros([124,3])
+            else:
+                self.cont_tensor = torch.zeros([124,4])
+        else:
+            self.cont_tensor = torch.zeros([124,5])
 
         self.cat_tensor = torch.zeros([124,7])
         yd=[]

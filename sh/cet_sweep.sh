@@ -1,8 +1,8 @@
-GPU_IDS=(5 6 7)  # 사용할 GPU ID 리스트
+GPU_IDS=(2 3 4 5 6 7)  # 사용할 GPU ID 리스트
 IDX=0
 ## Coarse Search
 ## Cos Anneal
-run_group="double_resi_lambda_sch"
+run_group="cutoffs_double_treat"
 for cutoff_dataset in 0 1 2 3 4 5 
 do
 for lr_init in 1e-2 1e-3 #1e-3 #5e-3 # best : 1e-2 
@@ -15,11 +15,11 @@ for hidden_dim in 128 256
 do
 for num_features in 64 128 #256 #128 256 512
 do
-for num_layers in 1 #2 #3 #4 5
+for num_layers in 1 3 #3 #4 5
 do
-for cet_transformer_layers in 4 # 3 6
+for cet_transformer_layers in 4 5 # 3 6
 do
-for num_heads in 4 8
+for num_heads in 2 4 8
 do
 for optim in "adam"
 do
@@ -35,9 +35,9 @@ for use_treatment in "--use_treatment" #""
 do
 for sig_x0 in 0.75 # 0.25
 do
-for residual_t in "--residual_t" #""
+for residual_t in "--residual_t" ""
 do
-for residual_x in "--residual_x" #""
+for residual_x in "--residual_x" ""
 do
 CUDA_VISIBLE_DEVICES=${GPU_IDS[$IDX]} python main.py --model=cet \
 --cutoff_dataset=${cutoff_dataset} \
@@ -70,6 +70,7 @@ if [ $IDX -eq 0 ]; then
 wait
 fi
 
+done
 done
 done
 done
