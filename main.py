@@ -587,12 +587,12 @@ if args.ignore_wandb == False:
         wandb.run.summary[f"best_val_loss (t1) {date_key}"] = best_val_loss_t1[i]
         wandb.run.summary[f"best_val_loss (t2) {date_key}"] = best_val_loss_t2[i]
         wandb.run.summary[f"best_val_loss {date_key}"] = best_val_loss_d[i] + best_val_loss_y[i]
-        wandb.run.summary[f"best_te_mae_loss (d)"] = best_test_losses[i][0]
-        wandb.run.summary[f"best_te_mae_loss (y)"] = best_test_losses[i][1]
-        wandb.run.summary[f"best_te_mae_loss"] = best_test_losses[i][0] + best_test_losses[i][1]
-        wandb.run.summary[f"best_te_rmse_loss (d) {date_key}"] = best_test_losses[i][2]
-        wandb.run.summary[f"best_te_rmse_loss (y) {date_key}"] = best_test_losses[i][3]
-        wandb.run.summary[f"best_te_rmse_loss {date_key}"] = best_test_losses[i][2] + best_test_losses[i][3]
+        wandb.run.summary[f"best_test_mae_loss (d)"] = best_test_losses[i][0]
+        wandb.run.summary[f"best_test_mae_loss (y)"] = best_test_losses[i][1]
+        wandb.run.summary[f"best_test_mae_loss"] = best_test_losses[i][0] + best_test_losses[i][1]
+        wandb.run.summary[f"best_test_rmse_loss (d)"] = best_test_losses[i][2]
+        wandb.run.summary[f"best_test_rmse_loss (y)"] = best_test_losses[i][3]
+        wandb.run.summary[f"best_test_rmse_loss"] = best_test_losses[i][2] + best_test_losses[i][3]
     
     wandb.run.summary["CE_y (t1)"] = ce_y_t1
     wandb.run.summary["CE_y (t2)"] = ce_y_t2
