@@ -22,7 +22,10 @@ class MLPRegressor(nn.Module):
         
         if disable_embedding:
             input_size = 12
-        self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        else: 
+            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.layers = nn.ModuleList([nn.Linear(input_size, hidden_size, bias=True)])
         for _ in range(args.num_layers - 2):
             self.layers.append(nn.Linear(hidden_size, hidden_size, bias=True))
@@ -45,7 +48,10 @@ class LinearRegression(torch.nn.Module):
 
         if args.disable_embedding:
             input_size = 12
-        self.embedding = TableEmbedding(input_size, disable_embedding = args.disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        else: 
+            self.embedding = TableEmbedding(input_size, disable_embedding = args.disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.linear1 = torch.nn.Linear(input_size, args.output_size)
 
     def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days):
@@ -66,7 +72,10 @@ class Transformer(nn.Module):
     def __init__(self, args):
         super(Transformer, self).__init__()
         
-        self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+        else:        
+            self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
         self.cls_token = nn.Parameter(torch.randn(1, 1, args.num_features))
         self.transformer_layer = nn.TransformerEncoderLayer(
             d_model=args.num_features,
@@ -103,10 +112,9 @@ class Transformer(nn.Module):
         cls_token = self.cls_token.expand(embedded.size(0), -1, -1) + cls_token_pe.unsqueeze(0).expand(embedded.size(0), -1, -1)
         input_with_cls = torch.cat([cls_token, embedded], dim=1)
         mask = ~(torch.arange(input_with_cls.size(1)).expand(input_with_cls.size(0), -1).cuda() < (val_len+1).unsqueeze(1)).cuda() # val_len + 1 ?
-        # import pdb;pdb.set_trace()
+        
         output = self.transformer_encoder(input_with_cls, src_key_padding_mask=mask.bool())  
         cls_output = output[:, 0, :] 
-        import pdb;pdb.set_trace() 
         regression_output = self.fc(cls_output) 
         
         return regression_output
@@ -217,7 +225,7 @@ class CEVAEEmbedding(torch.nn.Module):
             else:
                 nn_dim = nn_dim * 2
                 self.cont_c_NN = None
-            self.cont_p_NN = nn.Sequential(nn.Linear(3, emb_hidden_dim),
+            self.cont_p_NN = nn.Sequential(nn.Linear(3 , emb_hidden_dim),
                                         activation,
                                         nn.Linear(emb_hidden_dim, nn_dim))
         else:
@@ -269,6 +277,57 @@ class CEVAEEmbedding(torch.nn.Module):
             else:
                 return (x, diff_days, val_len), None
         else:
+            return reduction_cluster(x, diff_days, val_len, self.reduction)
+        
+class SyntheticEmbedding(torch.nn.Module):
+    '''
+        output_size : embedding output의 크기
+        disable_embedding : 연속 데이터의 임베딩 유무
+        disable_pe : transformer의 sequance 기준 positional encoding add 유무
+        reduction : "mean" : cluster 별 평균으로 reduction
+                    "date" : cluster 내 date 평균으로 reduction
+    '''
+    def __init__(self, args, output_size=128, disable_embedding=False, disable_pe=True, reduction="date", shift=False, use_treatment = False):
+        super().__init__()
+        self.shift = shift
+        self.reduction = reduction
+        self.disable_embedding = disable_embedding
+        self.disable_pe = disable_pe
+        self.use_treatment = args.use_treatment
+        activation = nn.ELU()
+        
+        print("Embedding applied to data")
+        nn_dim = emb_hidden_dim = emb_dim = output_size//4
+            
+        self.x1_NN = nn.Sequential(nn.Linear(1 if self.use_treatment else 2, emb_hidden_dim),
+                            activation,
+                            nn.Linear(emb_hidden_dim, nn_dim))
+        self.x2_NN = nn.Sequential(nn.Linear(1 if self.use_treatment else 2, emb_hidden_dim),
+                                    activation,
+                                    nn.Linear(emb_hidden_dim, nn_dim))
+        self.x3_NN = nn.Sequential(nn.Linear(1, emb_hidden_dim),
+                                        activation,
+                                        nn.Linear(emb_hidden_dim, nn_dim))
+        self.x4_NN = nn.Sequential(nn.Linear(1, emb_hidden_dim),
+                                        activation,
+                                        nn.Linear(emb_hidden_dim, nn_dim))
+        
+        if not disable_pe:
+            self.positional_embedding  = nn.Embedding(6, output_size)
+
+    def forward(self, x1, x2, x3, x4, val_len, diff_days):
+        x1_emb = self.x1_NN(x1)
+        x2_emb = self.x2_NN(x2) 
+        x3_emb = self.x3_NN(x3) 
+        x4_emb = self.x4_NN(x4) 
+
+        tensors_to_concat = [tensor for tensor in [x1_emb, x2_emb, x3_emb, x4_emb] if tensor is not None]
+        x = torch.cat(tensors_to_concat, dim=2)
+            
+        if not self.disable_pe:
+            x = x + self.positional_embedding(diff_days.int())
+            return (x, diff_days, val_len), self.positional_embedding(torch.tensor([5]).cuda())
+        else:        
             return reduction_cluster(x, diff_days, val_len, self.reduction)
     
 
@@ -848,7 +907,10 @@ class CETransformer(nn.Module):
             print("unidirectional attention applied")
         else:
             print("maxpool applied")
-        self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+        if not args.is_synthetic:
+            self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+        else:
+            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
         # self.pos_encoder = PositionalEncoding(d_model, dropout)
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
         self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)

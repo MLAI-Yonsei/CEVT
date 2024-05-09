@@ -1,0 +1,25 @@
+digraph {
+	X1
+	X2
+	X3
+	T1
+	T2
+	Y
+	T1 -> X1 [label=1.25]
+	X1 -> X2 [label=-0.15]
+	X3 -> X2 [label=-0.42]
+	T1 -> X2 [label=0.05]
+	T2 -> X2 [label=-0.18]
+	X1 -> X3 [label=1.62]
+	T1 -> X3 [label=0.99]
+	X1 -> T2 [label=0.13]
+	X3 -> T2 [label=0.34]
+	T1 -> T2 [label=0.89]
+	X1 -> Y [label=0.26]
+	X2 -> Y [label=-0.44]
+	X3 -> Y [label=0.71]
+	T2 -> Y [label=2.27]
+	{
+		rank=same
+	}
+}

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import pandas as pd
+import pickle 
 
 import os, time
 import math
@@ -11,8 +12,8 @@ import tabulate
 
 import utils, models, ml_algorithm
 import wandb
-from torch.utils.data import DataLoader, random_split, ConcatDataset
-
+from torch.utils.data import DataLoader, random_split, ConcatDataset, Subset, TensorDataset
+from collections import defaultdict
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -107,7 +108,7 @@ parser.add_argument(
     help="model name (default : transformer)")
 
 parser.add_argument("--save_path",
-            type=str, default="/mlainas/medical-ai/cluster-regression/exp_result/",
+            type=str, default="./best_models/",
             help="Path to save best model dict")
 
 parser.add_argument(
@@ -179,6 +180,7 @@ parser.add_argument(
     "--eval_criterion",
     type=str, default='MAE', choices=["MAE", "RMSE"],
     help="Criterion for training (default : MAE)")
+
 #----------------------------------------------------------------
 
 # Learning Hyperparameter --------------------------------------
@@ -215,6 +217,8 @@ parser.add_argument(
     type=str, default='t1', choices=["t1", "t2"],
     help="Intervention variable for Causal Effect Estimation (default : t1)")
 
+parser.add_argument('--is_synthetic', action='store_true', help='use synthetic dataset (default false)')
+
 args = parser.parse_args()
 ## ----------------------------------------------------------------------------------------------------
 
@@ -237,13 +241,53 @@ if args.ignore_wandb == False:
        
 ## Load Data --------------------------------------------------------------------------------
 ### ./data/data_mod.ipynb 에서 기본적인 데이터 전처리  ###
-dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
+if args.is_synthetic:
+    with open('./data/synthetic/synthetic_ts.pkl', 'rb') as f:
+        data = pickle.load(f)
+    dataset = utils.SyntheticTimeSeriesDataset(args, data)
+else:
+    dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
+
 train_dataset, val_dataset, test_dataset = random_split(dataset, utils.data_split_num(dataset))
 tr_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 print(f"Number of training Clusters : {len(train_dataset)}")
 
 val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+
+# if args.eval_per_cutoffs:
+#     all_diff_tensors = []
+
+#     # 데이터를 순회하며 diff_tensor 수집
+#     for *features, diff_tensor, treatment in test_dataloader:
+#         all_diff_tensors.append(diff_tensor)
+
+#     # 모든 diff_tensor를 하나로 결합
+#     all_diff_tensors = torch.cat(all_diff_tensors)
+
+#     # 최대 unique diff_tensor 값을 구함
+#     max_diff = int(max(all_diff_tensors.unique()).item())
+#     # 데이터 분할을 위한 구조 초기화
+#     grouped_data = defaultdict(list)
+
+#     # 데이터를 다시 순회하며 분류
+#     for *features, diff_tensor, treatment in test_dataloader:
+#         for i in range(diff_tensor.size(0)):
+#             key = int(max(diff_tensor.squeeze()[i].unique()))
+#             grouped_data[key].append(tuple(feature[i] for feature in features) + (diff_tensor[i],) + (treatment[i],))
+
+#     # 각 diff_tensor 값별로 새로운 DataLoader 생성
+#     grouped_dataloaders = {}
+#     for key in range(max_diff + 1):
+#         if key in grouped_data:
+#             group_data = list(zip(*grouped_data[key]))
+#             tensor_datasets = [torch.stack(items) for items in group_data]
+#             dataset = TensorDataset(*tensor_datasets)
+#             grouped_dataloaders[key] = DataLoader(dataset, batch_size=len(dataset))
+
+#     # 생성된 각 DataLoader 정보 출력
+#     for key, loader in grouped_dataloaders.items():
+#         print(f'DataLoader for group {key}: {len(loader.dataset)} items')
 
 print(f"use treatment as feature : {not args.use_treatment}")
 print("Successfully load data!")
@@ -460,6 +504,46 @@ for epoch in range(1, args.epochs + 1):
     # Save Best Model (Early Stopping)
     i=0
     if val_loss_d + val_loss_y < best_val_loss_d[i] + best_val_loss_y[i]:
+        # if args.eval_per_cutoffs:
+        #     best_cutoffs_mae_d={}
+        #     best_cutoffs_mae_y={}
+        #     best_cutoffs_mae_t1={}
+        #     best_cutoffs_mae_t2={}
+        #     best_cutoffs_rmse_d={}
+        #     best_cutoffs_rmse_y={}
+            
+        #     for eval_key, gtest_dataloader in grouped_dataloaders.items():
+        #         for _, data in enumerate(gtest_dataloader):
+        #             cuteval_te_mae_batch_loss_d, cuteval_te_mae_batch_loss_y, cuteval_te_mse_batch_loss_d, cuteval_te_mse_batch_loss_y, cuteval_te_num_data, cuteval_te_predicted, cuteval_te_ground_truth, *cuteval_t_loss = utils.test(args, data, model,
+        #                                                                     args.scaling, test_dataset.dataset.a_y, test_dataset.dataset.b_y,
+        #                                                                     test_dataset.dataset.a_d, test_dataset.dataset.b_d, use_treatment=args.use_treatment, MC_sample=args.MC_sample)
+        #             cuteval_te_mae_epoch_loss_d = cuteval_te_mae_batch_loss_d
+        #             cuteval_te_mae_epoch_loss_y = cuteval_te_mae_batch_loss_y
+        #             if args.use_treatment:
+        #                 # te_mae_epoch_loss_t += t_loss[0]
+        #                 cuteval_te_loss_t1, cuteval_te_loss_t2 = cuteval_t_loss[0], cuteval_t_loss[1]      
+        #                 cuteval_te_mae_epoch_loss_t1 = cuteval_te_loss_t1     
+        #                 cuteval_te_mae_epoch_loss_t2 = cuteval_te_loss_t2
+                        
+        #             cuteval_te_mse_epoch_loss_d = cuteval_te_mse_batch_loss_d
+        #             cuteval_te_mse_epoch_loss_y = cuteval_te_mse_batch_loss_y
+        #             cuteval_concat_te_num_data = cuteval_te_num_data
+
+        #         # Calculate Epoch loss
+        #         cuteval_te_mae_loss_d = cuteval_te_mae_epoch_loss_d / cuteval_concat_te_num_data
+        #         cuteval_te_mae_loss_y = cuteval_te_mae_epoch_loss_y / cuteval_concat_te_num_data
+        #         cuteval_te_mae_loss_t1 = cuteval_te_mae_epoch_loss_t1 * 6 / cuteval_concat_te_num_data
+        #         cuteval_te_mae_loss_t2 = (cuteval_te_mae_epoch_loss_t2 * 8 + 3) / cuteval_concat_te_num_data
+        #         cuteval_te_rmse_loss_d = math.sqrt(cuteval_te_mse_epoch_loss_d / cuteval_concat_te_num_data)
+        #         cuteval_te_rmse_loss_y = math.sqrt(cuteval_te_mse_epoch_loss_y / cuteval_concat_te_num_data)
+                
+        #         best_cutoffs_mae_d[eval_key]=cuteval_te_mae_loss_d
+        #         best_cutoffs_mae_y[eval_key]=cuteval_te_mae_loss_y
+        #         best_cutoffs_mae_t1[eval_key]=cuteval_te_mae_loss_t1
+        #         best_cutoffs_mae_t2[eval_key]=cuteval_te_mae_loss_t2
+        #         best_cutoffs_rmse_d[eval_key]=cuteval_te_rmse_loss_d
+        #         best_cutoffs_rmse_y[eval_key]=cuteval_te_rmse_loss_y
+            
         best_epochs[i] = epoch
         best_val_loss_d[i] = val_loss_d
         best_val_loss_y[i] = val_loss_y
@@ -476,13 +560,14 @@ for epoch in range(1, args.epochs + 1):
         
         best_model = model
         # save state_dict
-        # os.makedirs(args.save_path, exist_ok=True)
-        # os.makedirs(f"./best_model/seed_{args.seed}", exist_ok=True)
-        # utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
-        #                     epoch = epoch,
-        #                     state_dict = model.state_dict(),
-        #                     optimizer = optimizer.state_dict(),
-        #                     )
+        os.makedirs(args.save_path, exist_ok=True)
+        os.makedirs(f"./best_model/seed_{args.seed}", exist_ok=True)
+        utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
+                            epoch = epoch,
+                            state_dict = model.state_dict(),
+                            optimizer = optimizer.state_dict(),
+                            )
+        
         if args.save_pred:
             # save prediction and ground truth as csv
             val_df = pd.DataFrame({'val_pred_y':val_pred_y_list,
@@ -593,7 +678,14 @@ if args.ignore_wandb == False:
         wandb.run.summary[f"best_test_rmse_loss (d)"] = best_test_losses[i][2]
         wandb.run.summary[f"best_test_rmse_loss (y)"] = best_test_losses[i][3]
         wandb.run.summary[f"best_test_rmse_loss"] = best_test_losses[i][2] + best_test_losses[i][3]
-    
+    # if args.eval_per_cutoffs:
+    #     for eval_key in grouped_dataloaders.keys():
+    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_mae_loss (d)"] = best_cutoffs_mae_d[eval_key]
+    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_mae_loss (y)"] = best_cutoffs_mae_y[eval_key]
+    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_mae_loss (t1)"] = best_cutoffs_mae_t1[eval_key]
+    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_mae_loss (t2)"] = best_cutoffs_mae_t2[eval_key]
+    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_rmse_loss (d)"] = best_cutoffs_rmse_d[eval_key]
+    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_rmse_loss (y)"] = best_cutoffs_rmse_y[eval_key]
     wandb.run.summary["CE_y (t1)"] = ce_y_t1
     wandb.run.summary["CE_y (t2)"] = ce_y_t2
     wandb.run.summary["CE_d (t1)"] = ce_d_t1
