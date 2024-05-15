@@ -103,9 +103,9 @@ parser.add_argument("--cutoff_dataset",
 # Model ---------------------------------------------------------
 parser.add_argument(
     "--model",
-    type=str, default='transformer',
-    choices=["cet", "transformer", "linear", "ridge", "mlp", "svr", "rfr"],
-    help="model name (default : transformer)")
+    type=str, default='cet',
+    choices=["cet", "cevae", "transformer", "linear", "ridge", "mlp", "svr", "rfr"],
+    help="model name (default : cet)")
 
 parser.add_argument("--save_path",
             type=str, default="./best_models/",
@@ -301,6 +301,11 @@ if args.model == 'transformer':
 if args.model == 'cet':
     assert(args.use_treatment == True)
     model = models.CETransformer(args).to(args.device) 
+    
+if args.model == 'cevae':
+    assert(args.use_treatment == True)
+    assert(args.single_treatment == True)
+    model = models.CEVAE(args).to(args.device) 
 
 elif args.model == "mlp":
     model = models.MLPRegressor(args=args).to(args.device)

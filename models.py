@@ -330,37 +330,6 @@ class SyntheticEmbedding(torch.nn.Module):
         else:        
             return reduction_cluster(x, diff_days, val_len, self.reduction)
     
-
-class CEVAETransformer(nn.Module):
-    '''
-        input_size : TableEmbedding 크기
-        hidden_size : Transformer Encoder 크기
-        output_size : y, d (2)
-        num_layers : Transformer Encoder Layer 개수
-        num_heads : Multi Head Attention Head 개수
-        drop_out : DropOut 정도
-        disable_embedding : 연속 데이터 embedding 여부
-    '''
-    def __init__(self, input_size, hidden_size, num_layers, num_heads, drop_out):
-        super(CEVAETransformer, self).__init__()
-        self.transformer_layer = nn.TransformerEncoderLayer(
-            d_model=input_size,
-            nhead=num_heads,
-            dim_feedforward=hidden_size, 
-            dropout=drop_out,
-            batch_first=True
-        )
-        self.transformer_encoder = TransformerEncoder(self.transformer_layer, num_layers)
-        self.cls_token = nn.Parameter(torch.randn(1, 1, input_size))
-
-    def forward(self, x, val_len):
-        cls_token = self.cls_token.expand(x.size(0), -1, -1) 
-        input_with_cls = torch.cat([cls_token, x], dim=1)
-        mask = (torch.arange(input_with_cls.size(1)).expand(input_with_cls.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
-        output = self.transformer_encoder(input_with_cls, src_key_padding_mask=mask.bool())  
-        cls_emb = output[:, 0, :]  
-        return cls_emb
-    
 # ------------------------ for yd only --embedding_dim 64 --shared_layers 1 --pred_layers 1 -n 300
 # class CEVAE_Encoder(nn.Module):
 #     def __init__(self, input_dim, latent_dim, hidden_dim=128, shared_layers=3, pred_layers=3):
@@ -519,8 +488,6 @@ class CEVAE_Encoder(nn.Module): # -- [train all, conditioned by t]
         self.fc_yd = nn.Sequential(*yd_layers)
     
     def forward(self, x, t_gt=None):
-        warm_yd = self.warm_up(x)
-
         # Embed the continuous t
         t_pred = self.fc_t(x) if t_gt == None else t_gt.float().unsqueeze(1)
         t_embed = self.t_embedding(t_pred)
@@ -539,7 +506,7 @@ class CEVAE_Encoder(nn.Module): # -- [train all, conditioned by t]
         mu = self.fc_mu(h_tyd)
         logvar = self.fc_logvar(h_tyd)
         
-        return mu, logvar, yd_pred, t_pred.squeeze(), warm_yd
+        return mu, logvar, yd_pred, t_pred.squeeze()
 
 # class CEVAE_Decoder(nn.Module): [train seperated yd]
 #     def __init__(self, latent_dim, output_dim, hidden_dim=128, num_layers=2, t_classes=7):
@@ -630,60 +597,43 @@ class CEVAE_Decoder(nn.Module): #  [conditioned t, train overall yd]
         
         return t_pred.squeeze(), yd_pred, x_pred
 
-class CEVAE_det(nn.Module):
-    def __init__(self, embedding_dim, latent_dim=64, encoder_hidden_dim=128, encoder_shared_layers=3, encoder_pred_layers=1, transformer_layers=3, drop_out=0.0, num_heads=2, t_pred_layers=3, t_classes=7, t_embed_dim=16, yd_embed_dim=16, skip_hidden=False):
-        super(CEVAE_det, self).__init__()
-        self.x_emb = CEVAEEmbedding(output_size=embedding_dim)
-        self.transformer_encoder = CEVAETransformer(input_size=embedding_dim, hidden_size=latent_dim, num_layers=transformer_layers, num_heads=num_heads, drop_out=drop_out)
-        self.encoder = CEVAE_Encoder(input_dim=embedding_dim, latent_dim=latent_dim, hidden_dim=encoder_hidden_dim, shared_layers=encoder_shared_layers, t_pred_layers=t_pred_layers , pred_layers=encoder_pred_layers, t_classes=t_classes, t_embed_dim=t_embed_dim, yd_embed_dim=yd_embed_dim, skip_hidden=skip_hidden)
-        self.decoder = CEVAE_Decoder(latent_dim=latent_dim, output_dim=embedding_dim, hidden_dim=encoder_hidden_dim, t_pred_layers=t_pred_layers, shared_layers=encoder_shared_layers, t_classes=t_classes, t_embed_dim=t_embed_dim, skip_hidden=skip_hidden)
+class CEVAE(nn.Module):
+    def __init__(self, args):
+        super(CEVAE, self).__init__()
+        d_model=args.num_features
+        d_hid=args.hidden_dim
+        nlayers=args.cet_transformer_layers
+        dropout=args.drop_out
+        pred_layers=args.num_layers
+        self.shift = args.shift
+        self.unidir = args.unidir
+        self.is_variational = args.variational
+        
+        if not args.is_synthetic:
+            self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        else:
+            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        
+        self.encoder = CEVAE_Encoder(input_dim=d_model, latent_dim=d_hid, hidden_dim=d_model, shared_layers=nlayers, t_pred_layers=pred_layers , pred_layers=pred_layers, drop_out=dropout, t_embed_dim=d_hid, yd_embed_dim=d_hid)
+        self.decoder = CEVAE_Decoder(latent_dim=d_hid, output_dim=d_model, hidden_dim=d_hid, t_pred_layers=pred_layers, shared_layers=nlayers, drop_out=dropout, t_embed_dim=d_hid)
 
-    def forward(self, cont_p, cont_c, cat_p, cat_c, _len, diff, t_gt=None):
-        x = self.x_emb(cont_p, cont_c, cat_p, cat_c, _len, diff)
-        x_transformed = self.transformer_encoder(x, _len)
-        z_mu, z_logvar, enc_yd_pred, enc_t_pred, warm_yd = self.encoder(x_transformed, t_gt)
+    def forward(self, cont_p, cont_c, cat_p, cat_c, _len, diff, t_gt=None, is_MAP=False):
+        x = self.embedding(cont_p, cont_c, cat_p, cat_c, _len, diff)
+        z_mu, z_logvar, enc_yd_pred, enc_t_pred = self.encoder(x, t_gt)
         
         # Sample z using reparametrization trick
-        z = reparametrize(z_mu, z_logvar)
+        if is_MAP:
+            z=z_mu
+        elif self.is_variational:
+            z = reparametrize(z_mu, z_logvar)
+        else:
+            z_logvar = torch.full_like(z_mu, -100.0).cuda()
+            z = reparametrize(z_mu, z_logvar)
         
         # Decode z to get the reconstruction of x
         dec_t_pred, dec_yd_pred, x_reconstructed = self.decoder(z, t_gt)
-        
-        return x_transformed, x_reconstructed, z_mu, z_logvar, (enc_yd_pred, enc_t_pred), (dec_yd_pred, dec_t_pred), warm_yd
-    
 
-class CEVAE_debug(nn.Module):
-    def __init__(self, embedding_dim, latent_dim=64, encoder_hidden_dim=128, encoder_shared_layers=3, encoder_pred_layers=1, transformer_layers=3, drop_out=0.0, num_heads=2, t_pred_layers=3, t_classes=7, t_embed_dim=16, yd_embed_dim=16, skip_hidden=False):
-        super(CEVAE_debug, self).__init__()
-        activation=nn.ELU()
-        self.x_emb = CEVAEEmbedding(output_size=embedding_dim)
-        self.transformer_encoder = CEVAETransformer(input_size=embedding_dim, hidden_size=latent_dim, num_layers=transformer_layers, num_heads=num_heads, drop_out=drop_out)
-        self.fc = nn.Linear(embedding_dim,2)
-        
-        fc_layers = []
-        for _ in range(3):
-            fc_layers.append(nn.Linear(embedding_dim if len(fc_layers) == 0 else latent_dim, latent_dim))
-            fc_layers.append(activation)
-            fc_layers.append(nn.Dropout(drop_out))
-        fc_layers.append(nn.Linear(latent_dim,2))
-        self.fc_mlp = nn.Sequential(*fc_layers)
-        
-        fc_layers_d = []
-        for _ in range(3):
-            fc_layers_d.append(nn.Linear(embedding_dim if len(fc_layers_d) == 0 else latent_dim, latent_dim))
-            fc_layers_d.append(activation)
-            fc_layers_d.append(nn.Dropout(drop_out))
-        fc_layers_d.append(nn.Linear(latent_dim,1))
-        self.fc_mlp_d = nn.Sequential(*fc_layers_d)
-
-    def forward(self, cont_p, cont_c, cat_p, cat_c, _len, diff, t_gt=None):
-        x = self.x_emb(cont_p, cont_c, cat_p, cat_c, _len, diff)
-        x_transformed = self.transformer_encoder(x, _len)
-        # yd = self.fc(x_transformed)
-        yd = self.fc_mlp(x_transformed)
-        # d = self.fc_mlp_d(x_transformed)
-        return yd
-        # return torch.stack([y,d],dim=1).squeeze()
+        return x, x_reconstructed, (enc_yd_pred, torch.stack([enc_t_pred, torch.zeros_like(enc_t_pred)], dim=1)), (dec_yd_pred, torch.stack([dec_t_pred, torch.zeros_like(dec_t_pred)], dim=1)), (z_mu, z_logvar)
     
 class MLP(nn.Module):
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, dropout_rate=0.5):
@@ -911,10 +861,9 @@ class CETransformer(nn.Module):
             self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
         else:
             self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
-        # self.pos_encoder = PositionalEncoding(d_model, dropout)
+        
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
         self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
-        # self.transformer_encoder = TransformerEncoder(encoder_layers, nlayers)
 
         # Vairatioanl Z
         self.fc_mu = nn.Linear(d_model, d_model)
@@ -1058,19 +1007,3 @@ class CETransformer(nn.Module):
         # x_recon = torch.where(torch.arange(x_recon.size(1), device=x_recon.device)[None, :] < val_len[:, None], x_recon, torch.zeros_like(x))
         
         return x, x_recon, (enc_yd, torch.cat([enc_t1, enc_t2], dim=1)), (dec_yd, torch.cat([dec_t1, dec_t2], dim=1)), (z_mu, z_logvar)
-    
-# class PositionalEncoding(nn.Module):
-#     def __init__(self, d_model, dropout=0.5, max_len=5000):
-#         super(PositionalEncoding, self).__init__()
-#         self.dropout = nn.Dropout(p=dropout)
-
-#         position = torch.arange(max_len).unsqueeze(1)
-#         div_term = torch.exp(torch.arange(0, d_model, 2) * -(math.log(10000.0) / d_model))
-#         pe = torch.zeros(max_len, 1, d_model)
-#         pe[:, 0, 0::2] = torch.sin(position * div_term)
-#         pe[:, 0, 1::2] = torch.cos(position * div_term)
-#         self.register_buffer('pe', pe)
-
-#     def forward(self, x):
-#         x = x + self.pe[:x.size(0)]
-#         return self.dropout(x)

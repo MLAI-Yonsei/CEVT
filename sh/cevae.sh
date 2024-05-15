@@ -1,79 +1,73 @@
-#!/bin/bash
-
-GPU_IDS=(4 5 6 7)  # 사용할 GPU ID 리스트
+GPU_IDS=(2 3 4 5 6 7)  # 사용할 GPU ID 리스트
 IDX=0
-num_epochs=200
-sweep_group="make_overfit"
-for lambda1 in 1
+## Coarse Search
+## Cos Anneal
+run_group="cevae"
+for cutoff_dataset in 0
 do
-  for lambda2 in 1
-  do
-    for lambda3 in 1
-    do
-    for elbo_lambda1 in 0 
-    do
-    for elbo_lambda2 in 0 
-    do
-    for elbo_lambda3 in 0 
-    do
-    for elbo_lambda4 in 0 
-    do
-    for elbo_lambda5 in 0 
-    do
-    for elbo_lambda6 in 0 
-    do
-      for learning_rate in 1e-3
-      do
-      for feature_dim in 32 128 256 512
-      do
-      for num_layers in 3 8 12
-      do
-      for beta in 0.5
-      do
-      for eval_model in "encoder" # "decoder"
-      do
-          latent_dim=$((feature_dim / 2))
-          # 현재 GPU ID 선택
-          CUDA_VISIBLE_DEVICES=${GPU_IDS[$IDX]} python cevae.py \
-          --learning_rate ${learning_rate} \
-          --lambda1 ${lambda1} \
-          --lambda2 ${lambda2} \
-          --lambda3 ${lambda3} \
-          --elbo_lambda1 ${elbo_lambda1} \
-          --elbo_lambda2 ${elbo_lambda2} \
-          --elbo_lambda3 ${elbo_lambda3} \
-          --elbo_lambda4 ${elbo_lambda4} \
-          --elbo_lambda5 ${elbo_lambda5} \
-          --elbo_lambda6 ${elbo_lambda6} \
-          --beta ${beta} \
-          --sweep_group ${sweep_group} \
-          --feature_dim ${feature_dim} \
-          --latent_dim ${latent_dim} \
-          --hidden_dim ${feature_dim} \
-          --num-layers ${num_layers} \
-          --eval_model ${eval_model} \
-          --num_epochs ${num_epochs} 
-          
-          # GPU ID를 다음 것으로 변경
-          IDX=$(( ($IDX + 1) % ${#GPU_IDS[@]} ))
+for lr_init in 1e-2 1e-3 #1e-3 #5e-3 # best : 1e-2 
+do
+for wd in 1e-2 5e-3 1e-4 #1e-4 # best : 0.005
+do
+for drop_out in 0.1 0.6 # 0.0 # 0.2 # 0.5
+do
+for hidden_dim in 128 256
+do
+for num_features in 64 128 #256 #128 256 512
+do
+for num_layers in 1 3 #3 #4 5
+do
+for cet_transformer_layers in 4 5 # 3 6
+do
+for optim in "adam"
+do
+for lambda1 in 1 #0.5 1 2 #0.5 1 2 
+do
+for lambda2 in 1e-6 #1 2 #0.5 1 2 
+do
+for lambda3 in 1e-6 #10
+do
+for use_treatment in "--use_treatment" #""
+do
+CUDA_VISIBLE_DEVICES=${GPU_IDS[$IDX]} python main.py --model=cevae \
+--cutoff_dataset=${cutoff_dataset} \
+--hidden_dim=${hidden_dim} \
+--optim=${optim} \
+--lr_init=${lr_init} \
+--wd=${wd} \
+--epochs=300 \
+--scheduler=cos_anneal \
+--t_max=300 \
+--drop_out=${drop_out} \
+--num_layers=${num_layers} \
+--cet_transformer_layers=${cet_transformer_layers} \
+--num_features=${num_features} \
+--lambdas $lambda1 $lambda2 $lambda3 \
+--run_group=${run_group} \
+${use_treatment} \
+--single_treatment \
+--MC_sample=1 &
 
-          # 모든 GPU가 사용 중이면 기다림
-          if [ $IDX -eq 0 ]; then
-            wait
-          fi
-    done
-    done
-    done
-    done
-    done
-    done
-  done
-done
-done
-    done
-    done
-    done
-  done
-done
+# GPU ID를 다음 것으로 변경
+IDX=$(( ($IDX + 1) % ${#GPU_IDS[@]} ))
 
-wait 
+# 모든 GPU가 사용 중이면 기다림
+if [ $IDX -eq 0 ]; then
+wait
+fi
+
+done
+done
+done
+done
+done
+done
+done
+done
+done
+done
+done
+done
+done
+done
+wait
