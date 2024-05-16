@@ -1,6 +1,6 @@
 #!/bin/bash
 
-seeds=(998 999 1001 1002 2000 3000)
+seeds=(800 900 950 1050 0 1234 4321 9876 4567 4000 5000 6000 7000)
 
 for seed in "${seeds[@]}"; do
     echo "Running experiments with seed $seed"

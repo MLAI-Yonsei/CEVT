@@ -322,7 +322,7 @@ class SyntheticEmbedding(torch.nn.Module):
         x4_emb = self.x4_NN(x4) 
 
         tensors_to_concat = [tensor for tensor in [x1_emb, x2_emb, x3_emb, x4_emb] if tensor is not None]
-        x = torch.cat(tensors_to_concat, dim=2)
+        x = torch.cat(tensors_to_concat, dim=-1).unsqueeze(1)
             
         if not self.disable_pe:
             x = x + self.positional_embedding(diff_days.int())
@@ -847,6 +847,7 @@ class CETransformer(nn.Module):
         self.shift = args.shift
         self.unidir = args.unidir
         self.is_variational = args.variational
+        self.is_synthetic = args.is_synthetic
         
         if args.variational:
             print("variational z sampling")
@@ -860,7 +861,7 @@ class CETransformer(nn.Module):
         if not args.is_synthetic:
             self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
         else:
-            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
         
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
         self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
@@ -933,7 +934,7 @@ class CETransformer(nn.Module):
     def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_MAP=False):
         # Encoder
         if self.embedding.reduction != "none":
-            x = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            x = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days).unsqueeze(1)
         else:
             (x, diff_days, _), start_tok = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days) # embedded:(32, 124, 128)
         index_tensor = torch.arange(x.size(1), device=x.device)[None, :, None]
@@ -963,8 +964,6 @@ class CETransformer(nn.Module):
         else:
             z_logvar = torch.full_like(z_mu, -100.0).cuda()
             z = reparametrize(z_mu, z_logvar)
-        # Baseline Transformer encoder
-        # z = self.transformer_encoder(x, src_key_padding_mask=src_mask)
         
         dec_t1 = self.z2t(z.squeeze())
         t1_emb = self.t1_emb(dec_t1)
@@ -974,8 +973,8 @@ class CETransformer(nn.Module):
         # Linear Decoder
         dec_yd = self.zt2yd(z.squeeze() + t1_emb + t2_emb)
         
-        pos_embeddings = self.embedding.positional_embedding(diff_days.squeeze().long())
-
+        pos_embeddings = self.embedding.positional_embedding(diff_days.squeeze().long()) if not self.is_synthetic else torch.zeros_like(z.unsqueeze(1))
+        
         # 입력 z에 위치 임베딩 추가
         z_expanded = z.unsqueeze(1) + pos_embeddings  # [batch_size, 124, hidden_dim]
         z_expanded = torch.where(index_tensor < val_len[:, None, None], z_expanded, torch.zeros_like(z_expanded))

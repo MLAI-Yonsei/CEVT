@@ -116,6 +116,75 @@ class Tabledata(Dataset):
         treatment = torch.mean(torch.tensor(self.treatment[self.cluster == index]), dim=0) # t1: dis|t2: danger
         return cont_tensor_p, cont_tensor_c, cat_tensor_p, cat_tensor_c, data_len, yd, diff_tensor, treatment
 
+class SyntheticDataset(Dataset):
+    def __init__(self, args, data_frames):
+        self.use_treatment = args.use_treatment
+
+        self.X1 = torch.tensor(data_frames['X1'].values, dtype=torch.float32)
+        self.X2 = torch.tensor(data_frames['X2'].values, dtype=torch.float32)
+        self.X3 = torch.tensor(data_frames['X3'].values, dtype=torch.float32)
+        self.X4 = torch.tensor(data_frames['X4'].values, dtype=torch.float32)
+        self.T1 = torch.tensor(data_frames['T1'].values, dtype=torch.float32)
+        self.T2 = torch.tensor(data_frames['T2'].values, dtype=torch.float32)
+        self.Y = torch.tensor(data_frames['Y'].values, dtype=torch.float32)
+        
+        if args.scaling == 'minmax':
+            self.Y, self.a_y, self.b_y = minmax_tensor(self.Y)
+            self.a_d, self.b_d = None, None
+        
+        if not args.use_treatment:
+            self.X1 = torch.stack([self.X1, self.X2], dim=-1)
+            self.X2 = torch.stack([self.T1, self.T2], dim=-1)
+            
+    def __len__(self):
+        # 데이터셋의 총 길이 반환
+        return len(self.Y)
+    
+    def __getitem__(self, idx):
+        # 특정 인덱스의 데이터 텐서 반환
+        x1 = self.X1[idx]
+        x2 = self.X2[idx]
+        x3 = self.X3[idx]
+        x4 = self.X4[idx]
+        y = self.Y[idx]
+        # y = torch.sum(self.P[idx])
+        t1 = self.T1[idx]
+        t2 = self.T2[idx]
+
+        # T1과 T2를 하나의 텐서로 연결
+        t = torch.cat((t1.unsqueeze(0), t2.unsqueeze(0)), dim=0)
+
+        # 인덱스 텐서와 X1의 길이 반환
+        index_tensor = torch.tensor([0, 1, 2, 3, 4], dtype=torch.float).cuda()
+        
+        if self.use_treatment:
+           x1 = x1.unsqueeze(-1)
+           x2 = x2.unsqueeze(-1)
+           
+        x3 = x3.unsqueeze(-1)
+        x4 = x4.unsqueeze(-1) 
+        
+        return x1, x2, x3, x4, x1.shape[0], torch.stack([y,torch.zeros_like(y)]).cuda(), index_tensor, t
+
+## MinMax Scaling Functions ------------------------------------
+def minmax_col(data, name):
+    minval , maxval = data[name].min(), data[name].max()
+    data[name]=(data[name]-data[name].min())/(data[name].max()-data[name].min())
+    return minval, maxval
+
+def minmax_tensor(tensor):
+    minvals = tensor.min()
+    maxvals = tensor.max()
+    
+    normalized = (tensor - minvals) / (maxvals - minvals)
+    return normalized, minvals, maxvals
+
+def restore_minmax(data, minv, maxv):
+    minv=0 if minv==None else minv
+    maxv=0 if maxv==None else maxv
+    data = (data * (maxv - minv)) + minv
+    return data
+
 class SyntheticTimeSeriesDataset(Dataset):
     def __init__(self, args, data_frames):
         self.use_treatment = args.use_treatment
@@ -573,7 +642,10 @@ def CE(args, model, dataloader, intervene_var):
         if args.use_treatment:
             if args.model == 'cet':
                 # Model의 encoder 부분에서 t와 yd를 예측하고 이 값을 사용하니, Transformer encoder 부분만 불러와서 forward
-                (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                if args.is_synthetic:
+                    x = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days).unsqueeze(1)
+                else:
+                    (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                 src_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
                 src_mask = model.generate_square_subsequent_mask(x.size(1)).cuda() if model.unidir else None
 

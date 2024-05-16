@@ -242,9 +242,10 @@ if args.ignore_wandb == False:
 ## Load Data --------------------------------------------------------------------------------
 ### ./data/data_mod.ipynb 에서 기본적인 데이터 전처리  ###
 if args.is_synthetic:
-    with open('./data/synthetic/synthetic_ts.pkl', 'rb') as f:
+    with open('./data/synthetic/synthetic_dowhy.pkl', 'rb') as f:
         data = pickle.load(f)
-    dataset = utils.SyntheticTimeSeriesDataset(args, data)
+    # dataset = utils.SyntheticTimeSeriesDataset(args, data)
+    dataset = utils.SyntheticDataset(args, data)
 else:
     dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
 
