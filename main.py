@@ -567,12 +567,12 @@ for epoch in range(1, args.epochs + 1):
         best_model = model
         # save state_dict
         # os.makedirs(args.save_path, exist_ok=True)
-        os.makedirs(f"./best_model/seed_{args.seed}", exist_ok=True)
-        utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
-                            epoch = epoch,
-                            state_dict = model.state_dict(),
-                            optimizer = optimizer.state_dict(),
-                            )
+        # os.makedirs(f"./best_model/seed_{args.seed}", exist_ok=True)
+        # utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
+        #                     epoch = epoch,
+        #                     state_dict = model.state_dict(),
+        #                     optimizer = optimizer.state_dict(),
+        #                     )
         
         if args.save_pred:
             # save prediction and ground truth as csv

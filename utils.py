@@ -130,6 +130,14 @@ class SyntheticDataset(Dataset):
         
         if args.scaling == 'minmax':
             self.Y, self.a_y, self.b_y = minmax_tensor(self.Y)
+            self.T1, self.a_t1, self.b_t1 = minmax_tensor(self.T1)
+            self.T2, self.a_t2, self.b_t2 = minmax_tensor(self.T2)
+            
+            self.X1, _, _ = minmax_tensor(self.X1)
+            self.X2, _, _ = minmax_tensor(self.X2)
+            self.X3, _, _ = minmax_tensor(self.X3)
+            self.X4, _, _ = minmax_tensor(self.X4)
+            
             self.a_d, self.b_d = None, None
         
         if not args.use_treatment:
@@ -155,7 +163,7 @@ class SyntheticDataset(Dataset):
         t = torch.cat((t1.unsqueeze(0), t2.unsqueeze(0)), dim=0)
 
         # 인덱스 텐서와 X1의 길이 반환
-        index_tensor = torch.tensor([0, 1, 2, 3, 4], dtype=torch.float).cuda()
+        index_tensor = torch.tensor([0, 0, 0, 0, 0], dtype=torch.float).cuda()
         
         if self.use_treatment:
            x1 = x1.unsqueeze(-1)
@@ -301,7 +309,7 @@ def train(args, data, model, optimizer, criterion, epoch, warmup_iter=0, lamb=0.
         if args.model == 'cet':
             loss, *ind_losses = cetransformer_loss(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, gt_t, y[:,0] , y[:,1], criterion, lambdas, val_len=len)
         elif args.model == 'cevae':
-                loss, *ind_losses = cevae_loss(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, gt_t, y[:,0] , y[:,1], criterion, lambdas, val_len=len)
+            loss, *ind_losses = cevae_loss(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, gt_t, y[:,0] , y[:,1], criterion, lambdas, val_len=len)
         (enc_loss_y, enc_loss_d), (dec_loss_y, dec_loss_d), (enc_loss_t, dec_loss_t), (pred_loss, kl_loss, recon_loss) = ind_losses
         
     else:
@@ -661,16 +669,19 @@ def CE(args, model, dataloader, intervene_var):
                 saved_original_t = original_t.clone()
                 saved_original_enc_yd = original_enc_yd.clone()
                 
-                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
                 for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                     original_t=saved_original_t.clone()
                     original_enc_yd=saved_original_enc_yd.clone()
                     
-                    if intervene_var == 't1':
-                        intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
-                    elif intervene_var == 't2':
-                        intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
-
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                        elif intervene_var == 't2':
+                            intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
                     
                     # intervene_t를 배치 크기와 같은 텐서로 생성
                     intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
@@ -698,10 +709,17 @@ def CE(args, model, dataloader, intervene_var):
                     #     intervene_t = intervene_t[~exclude_indices]
                         
                     delta_y = original_enc_yd - intervene_enc_yd
-                    if intervene_var == 't1':
-                        delta_t = (original_t - intervene_t)*6  # denormalize 
-                    elif intervene_var == 't2':
-                        delta_t = (original_t - intervene_t)*8  # +3 denormalize 
+                    delta_t = (original_t - intervene_t)
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
+                        
                     delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
             
                     for i in range(delta_y.size(0)):
@@ -1069,7 +1087,6 @@ def cetransformer_loss(x_reconstructed, x,
 
     # # Reconstruction Loss
     # recon_loss = nan_filtered_loss(x_reconstructed, x, criterion)
-
     total_loss = lambdas[0]*pred_loss + lambdas[1]*kl_loss + lambdas[2]*recon_loss
     # total_loss = lambdas[0]*enc_y_loss + lambdas[1]*enc_d_loss #+ lambdas[2]*recon_loss
     return total_loss, (enc_y_loss, enc_d_loss), (dec_y_loss, dec_d_loss), ((enc_t1_loss, enc_t2_loss), (dec_t1_loss, dec_t2_loss)), (pred_loss, kl_loss, recon_loss)
