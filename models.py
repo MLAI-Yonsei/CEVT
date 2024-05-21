@@ -23,7 +23,7 @@ class MLPRegressor(nn.Module):
         if disable_embedding:
             input_size = 12
         if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
         else: 
             self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.layers = nn.ModuleList([nn.Linear(input_size, hidden_size, bias=True)])
@@ -49,7 +49,7 @@ class LinearRegression(torch.nn.Module):
         if args.disable_embedding:
             input_size = 12
         if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
         else: 
             self.embedding = TableEmbedding(input_size, disable_embedding = args.disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.linear1 = torch.nn.Linear(input_size, args.output_size)
@@ -73,7 +73,7 @@ class Transformer(nn.Module):
         super(Transformer, self).__init__()
         
         if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
         else:        
             self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
         self.cls_token = nn.Parameter(torch.randn(1, 1, args.num_features))
@@ -287,7 +287,7 @@ class SyntheticEmbedding(torch.nn.Module):
         reduction : "mean" : cluster 별 평균으로 reduction
                     "date" : cluster 내 date 평균으로 reduction
     '''
-    def __init__(self, args, output_size=128, disable_embedding=False, disable_pe=True, reduction="date", shift=False, use_treatment = False):
+    def __init__(self, args, output_size=128, disable_embedding=False, disable_pe=True, reduction="date", shift=False):
         super().__init__()
         self.shift = shift
         self.reduction = reduction
@@ -295,7 +295,8 @@ class SyntheticEmbedding(torch.nn.Module):
         self.disable_pe = disable_pe
         self.use_treatment = args.use_treatment
         activation = nn.ELU()
-        
+        if not disable_pe:
+            self.positional_embedding  = nn.Embedding(5, output_size)
         print("Embedding applied to data")
         nn_dim = emb_hidden_dim = emb_dim = output_size//4
             
@@ -320,12 +321,12 @@ class SyntheticEmbedding(torch.nn.Module):
         x2_emb = self.x2_NN(x2) 
         x3_emb = self.x3_NN(x3) 
         x4_emb = self.x4_NN(x4) 
-
+        
         tensors_to_concat = [tensor for tensor in [x1_emb, x2_emb, x3_emb, x4_emb] if tensor is not None]
-        x = torch.cat(tensors_to_concat, dim=-1).unsqueeze(1)
-            
+        x = torch.cat(tensors_to_concat, dim=-1)
         if not self.disable_pe:
             x = x + self.positional_embedding(diff_days.int())
+        if self.reduction == 'none':
             return (x, diff_days, val_len), self.positional_embedding(torch.tensor([5]).cuda())
         else:        
             return reduction_cluster(x, diff_days, val_len, self.reduction)
@@ -374,7 +375,7 @@ class SyntheticEmbedding(torch.nn.Module):
 #         return mu, logvar, yd_pred, t_pred
     
 # class CEVAE_Encoder(nn.Module): # -- [train all, divided by t]
-#     def __init__(self, input_dim, latent_dim, hidden_dim=128, shared_layers=3, pred_layers=3, t_classes=7):
+#     def __init__(self, input_dim, latent_dim, hidden_dim=128, shared_layers=3, pred_layers=3, t_pred_layers=3, t_embed_dim=8, yd_embed_dim=8, drop_out=0, t_classes=7, skip_hidden=False):
 #         super(CEVAE_Encoder, self).__init__()
 #         # Warm up layer
 #         self.warm_up = nn.Linear(input_dim, 2) # predict only y and d
@@ -425,7 +426,6 @@ class SyntheticEmbedding(torch.nn.Module):
 
 #     def forward(self, x, t_gt=None):
 #         h_shared = self.fc_shared(x)
-#         warm_yd = self.warm_up(x)
 #         if t_gt==None:
 #             t_pred = self.fc_t(h_shared)
 #             t_class = t_pred.argmax(dim=1)
@@ -443,7 +443,7 @@ class SyntheticEmbedding(torch.nn.Module):
 #         z_preds_logvar = [z_nn['logvar'](h_combined) for z_nn in self.z_nns]
 #         logvar = torch.stack([z_preds_logvar[i][idx] for idx, i in enumerate(t_class)], dim=0)
 
-#         return mu, logvar, yd_pred, t_pred, warm_yd
+#         return mu, logvar, yd_pred, t_pred.squeeze()
 
 
 class CEVAE_Encoder(nn.Module): # -- [train all, conditioned by t]
@@ -612,7 +612,7 @@ class CEVAE(nn.Module):
         if not args.is_synthetic:
             self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
         else:
-            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
         
         self.encoder = CEVAE_Encoder(input_dim=d_model, latent_dim=d_hid, hidden_dim=d_model, shared_layers=nlayers, t_pred_layers=pred_layers , pred_layers=pred_layers, drop_out=dropout, t_embed_dim=d_hid, yd_embed_dim=d_hid)
         self.decoder = CEVAE_Decoder(latent_dim=d_hid, output_dim=d_model, hidden_dim=d_hid, t_pred_layers=pred_layers, shared_layers=nlayers, drop_out=dropout, t_embed_dim=d_hid)
@@ -861,7 +861,7 @@ class CETransformer(nn.Module):
         if not args.is_synthetic:
             self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
         else:
-            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
         
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
         self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
@@ -1006,3 +1006,459 @@ class CETransformer(nn.Module):
         # x_recon = torch.where(torch.arange(x_recon.size(1), device=x_recon.device)[None, :] < val_len[:, None], x_recon, torch.zeros_like(x))
         
         return x, x_recon, (enc_yd, torch.cat([enc_t1, enc_t2], dim=1)), (dec_yd, torch.cat([dec_t1, dec_t2], dim=1)), (z_mu, z_logvar)
+
+
+#############################################################################
+### iTransformer
+#############################################################################
+class TableEmbedding_iTrans(torch.nn.Module):
+    def __init__(self, output_size=128, disable_pe=True, use_treatment=False):
+        super().__init__()
+        self.max_len = 124
+        self.output_size = output_size
+        self.disable_pe = disable_pe
+
+        nn_dim = emb_hidden_dim = emb_dim_c = emb_dim_p = output_size//4
+        self.cont_p_NN = nn.Sequential(nn.Linear(3, emb_hidden_dim),
+                                    nn.ReLU(),
+                                    nn.Linear(emb_hidden_dim, nn_dim))
+        self.cont_c_NN = nn.Sequential(nn.Linear(1 if use_treatment else 2, emb_hidden_dim),
+                                    nn.ReLU(),
+                                    nn.Linear(emb_hidden_dim, nn_dim))
+
+        self.lookup_gender  = nn.Embedding(2, emb_dim_p)
+        self.lookup_korean  = nn.Embedding(2, emb_dim_p)
+        self.lookup_primary  = nn.Embedding(2, emb_dim_p)
+        self.lookup_job  = nn.Embedding(11, emb_dim_p)
+        self.lookup_rep  = nn.Embedding(34, emb_dim_p)
+        self.lookup_place  = nn.Embedding(19, emb_dim_c)
+        self.lookup_add  = nn.Embedding(31, emb_dim_c)
+        if not disable_pe:
+            self.positional_embedding  = nn.Embedding(6, output_size)
+
+    def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days):
+        cont_p_emb = self.cont_p_NN(cont_p)
+        cont_c_emb = self.cont_c_NN(cont_c)
+        a1_embs = self.lookup_gender(cat_p[:,:,0].to(torch.int))
+        a2_embs = self.lookup_korean(cat_p[:,:,1].to(torch.int))
+        a3_embs = self.lookup_primary(cat_p[:,:,2].to(torch.int))
+        a4_embs = self.lookup_job(cat_p[:,:,3].to(torch.int))
+        a5_embs = self.lookup_rep(cat_p[:,:,4].to(torch.int))
+        a6_embs = self.lookup_place(cat_c[:,:,0].to(torch.int))
+        a7_embs = self.lookup_add(cat_c[:,:,1].to(torch.int))
+        
+        cat_p_emb = torch.mean(torch.stack([a1_embs, a2_embs, a3_embs, a4_embs, a5_embs]), axis=0)
+        cat_c_emb = torch.mean(torch.stack([a6_embs, a7_embs]), axis=0)
+
+        x = torch.cat((cat_p_emb, cat_c_emb, cont_p_emb, cont_c_emb), dim=2)
+        if not self.disable_pe:
+            x = x + self.positional_embedding(diff_days.int().squeeze(2))    
+            return (x, diff_days, val_len), self.positional_embedding(torch.tensor([5]).cuda())
+        else:
+            return (x, diff_days, val_len), None
+
+
+
+class Encoder_iTrans(nn.Module):
+    def __init__(self, attn_layers, conv_layers=None, norm_layer=None):
+        super(Encoder_iTrans, self).__init__()
+        self.attn_layers = nn.ModuleList(attn_layers)
+        self.conv_layers = nn.ModuleList(conv_layers) if conv_layers is not None else None
+        self.norm = norm_layer
+
+    def forward(self, x, attn_mask=None, tau=None, delta=None):
+        # x [B, L, D]
+        if self.conv_layers is not None:
+            for i, (attn_layer, conv_layer) in enumerate(zip(self.attn_layers, self.conv_layers)):
+                delta = delta if i == 0 else None
+                x = attn_layer(x, attn_mask=attn_mask, tau=tau, delta=delta)
+                x = conv_layer(x)
+            x = self.attn_layers[-1](x, tau=tau, delta=None)
+        else:
+            for attn_layer in self.attn_layers:
+                x = attn_layer(x, attn_mask=attn_mask, tau=tau, delta=delta)
+
+        if self.norm is not None:
+            x = self.norm(x)
+
+        return x
+
+
+
+class EncoderLayer_iTrans(nn.Module):
+    def __init__(self, attention, d_model, dropout=0.1):
+        super(EncoderLayer_iTrans, self).__init__()
+        d_ff = 4 * d_model
+        self.attention = attention
+        self.conv1 = nn.Conv1d(in_channels=d_model, out_channels=d_ff, kernel_size=1)
+        self.conv2 = nn.Conv1d(in_channels=d_ff, out_channels=d_model, kernel_size=1)
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        self.dropout = nn.Dropout(dropout)
+        self.activation = F.gelu
+
+    def forward(self, x, attn_mask=None, tau=None, delta=None):
+        new_x = self.attention(
+            x, x, x,
+            attn_mask=attn_mask,
+            tau=tau, delta=delta
+        )
+        x = x + self.dropout(new_x)
+
+        y = x = self.norm1(x)
+        y = self.dropout(self.activation(self.conv1(y.transpose(-1, 1))))
+        y = self.dropout(self.conv2(y).transpose(-1, 1))
+
+        return self.norm2(x + y)
+
+
+
+class AttentionLayer_iTrans(nn.Module):
+    def __init__(self, attention, d_model, n_heads):
+        super(AttentionLayer_iTrans, self).__init__()
+
+        d_keys = d_model // n_heads
+        d_values = d_model // n_heads
+
+        self.inner_attention = attention
+        self.query_projection = nn.Linear(d_model, d_keys * n_heads)
+        self.key_projection = nn.Linear(d_model, d_keys * n_heads)
+        self.value_projection = nn.Linear(d_model, d_values * n_heads)
+        self.out_projection = nn.Linear(d_values * n_heads, d_model)
+        self.n_heads = n_heads
+
+    def forward(self, queries, keys, values, attn_mask, tau=None, delta=None):
+        B, L, _ = queries.shape
+        _, S, _ = keys.shape
+        H = self.n_heads
+
+        queries = self.query_projection(queries).view(B, L, H, -1)
+        keys = self.key_projection(keys).view(B, S, H, -1)
+        values = self.value_projection(values).view(B, S, H, -1)
+
+        out = self.inner_attention(
+            queries,
+            keys,
+            values,
+            attn_mask,
+            tau=tau,
+            delta=delta
+        )
+        out = out.view(B, L, -1)
+
+        return self.out_projection(out)
+
+
+import math
+import numpy as np
+class FullAttention(nn.Module):
+    def __init__(self, mask_flag=True, scale=None, attention_dropout=0.1):
+        super(FullAttention, self).__init__()
+        self.scale = scale
+        self.mask_flag = mask_flag
+        self.dropout = nn.Dropout(attention_dropout)
+
+    def forward(self, queries, keys, values, attn_mask, tau=None, delta=None):
+        B, L, H, E = queries.shape
+        _, S, _, D = values.shape
+        scale = self.scale or 1. / math.sqrt(E)
+
+        scores = torch.einsum("blhe,bshe->bhls", queries, keys)
+
+        if self.mask_flag:
+            if attn_mask is None:
+                attn_mask = TriangularCausalMask(B, L, device=queries.device)
+
+            scores.masked_fill_(attn_mask.mask, -np.inf)
+
+        A = self.dropout(torch.softmax(scale * scores, dim=-1))
+        V = torch.einsum("bhls,bshd->blhd", A, values)
+
+        return V.contiguous()
+
+
+class TriangularCausalMask():
+    def __init__(self, B, L, device="cpu"):
+        mask_shape = [B, 1, L, L]
+        with torch.no_grad():
+            self._mask = torch.triu(torch.ones(mask_shape, dtype=torch.bool), diagonal=1).to(device)
+
+    @property
+    def mask(self):
+        return self._mask
+
+
+class iTransformer(nn.Module):
+    def __init__(self, args, input_size, hidden_size, output_size, num_layers, num_heads, drop_out):
+        super(iTransformer, self).__init__()
+        self.is_synthetic = args.is_synthetic
+        self.max_len = 124 # hard-coding (seq_len)
+        
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
+        else: 
+            self.embedding = TableEmbedding_iTrans(output_size=input_size, disable_pe=True, use_treatment=args.use_treatment)
+        
+        # Encoder-only architecture
+        self.encoder = Encoder_iTrans(
+            [
+                EncoderLayer_iTrans(
+                    AttentionLayer_iTrans(
+                        FullAttention(False, attention_dropout=drop_out), hidden_size, num_heads),
+                    hidden_size,
+                    dropout=drop_out,
+                ) for l in range(num_layers)
+            ],
+            norm_layer=torch.nn.LayerNorm(hidden_size)
+        )
+        self.projector = nn.Linear(hidden_size, output_size, bias=True)
+
+        
+        
+    def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days):
+        # Embedding
+        # B L N -> B N E                (B L N -> B L E in the vanilla Transformer)
+        (embedded, diff_days, _), _ = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)  # (B, L, E) == (B, N, E)
+
+        B, L, E = embedded.shape
+        N = L
+        # B: batch_size;    E: d_model; 
+        # L: seq_len;       S: pred_len;
+        # N: == L
+        
+        # B N E -> B N E                (B L E -> B L E in the vanilla Transformer)
+        # the dimensions of embedded time series has been inverted, and then processed by native attn, layernorm and ffn modules
+        enc_out = self.encoder(embedded, attn_mask=None)
+    
+        # B N E -> B N S -> B S N 
+        dec_out = self.projector(enc_out).permute(0, 2, 1)[:, :, :N] # filter the covariates # (B, 2, L) == (B, 2, N)
+        return dec_out[:,:,-1:].squeeze()
+    
+        
+#############################################################################
+### DragonNet
+#############################################################################
+"""
+https://github.com/claudiashi57/dragonnet/blob/master/src/experiment/models.py
+"""
+class EpsilonLayer(torch.nn.Module):
+    def __init__(self):
+        super(EpsilonLayer, self).__init__()
+    
+    def forward(self, input):
+        epsilon = nn.Parameter(torch.randn_like(input), requires_grad=True)
+        return epsilon
+
+
+
+class DragonNet(nn.Module):
+    """
+    l2 regularizer 가 안 들어감. vs tf code
+        """
+    def __init__(self, args, 
+                input_size=128, hidden_size=200, output_size=2, num_treatments=7, disable_embedding=False):
+        super(DragonNet, self).__init__()        
+        
+        if disable_embedding:
+            input_size = 12
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
+        else: 
+            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        # Representation
+        self.representation = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ELU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU()
+        )
+        
+        # t predictions
+        self.t_predictions = nn.Linear(hidden_size, num_treatments)
+        
+        # Hypothesis
+        self.y0_hidden = nn.Sequential(
+            nn.Linear(hidden_size, int(hidden_size//2)),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+        
+        self.y1_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+        
+        self.y2_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+        
+        self.y3_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+        
+        self.y4_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+        
+        self.y5_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+
+        self.y6_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+        
+        self.epsilon_layer = EpsilonLayer()
+        
+        
+    def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days):
+        x = self.embedding(cont_p, cont_c, cat_p, cat_c, len, diff_days)
+        x_rep = self.representation(x)
+        
+        t_pred = self.t_predictions(x_rep)
+        
+        y0_pred = self.y0_hidden(x_rep)
+        y1_pred = self.y1_hidden(x_rep)
+        y2_pred = self.y2_hidden(x_rep)
+        y3_pred = self.y3_hidden(x_rep)
+        y4_pred = self.y4_hidden(x_rep)
+        y5_pred = self.y5_hidden(x_rep)
+        y6_pred = self.y6_hidden(x_rep)
+        
+        epsilons = self.epsilon_layer(t_pred)
+        
+        return y0_pred, y1_pred, y2_pred, y3_pred, y4_pred, y5_pred, y6_pred, t_pred, epsilons
+    
+
+
+#############################################################################
+### TarNet
+#############################################################################
+class TarNet(nn.Module):
+    def __init__(self, args, 
+                input_size=128, hidden_size=200, output_size=2, num_treatments=7, disable_embedding=False):
+        super(TarNet, self).__init__()
+        if disable_embedding:
+            input_size = 12
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
+        else: 
+            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        # Representation
+        self.representation = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ELU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU(),
+            nn.Linear(hidden_size, hidden_size),
+            nn.ELU()
+        )
+
+        # T Predictions
+        self.t_predictions = nn.Linear(input_size, num_treatments)
+
+        # Hypothesis
+        self.y0_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+
+        self.y1_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+        
+        self.y2_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+                
+        self.y3_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+                        
+        self.y4_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+                                
+        self.y5_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+                                        
+        self.y6_hidden = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, hidden_size//2),
+            nn.ELU(),
+            nn.Linear(hidden_size//2, output_size)
+        )
+
+        self.epsilon_layer = EpsilonLayer()
+
+
+    def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days):
+        x = self.embedding(cont_p, cont_c, cat_p, cat_c, len, diff_days)
+        x_rep = self.representation(x)
+
+        t_pred = self.t_predictions(x)
+
+        y0_pred = self.y0_hidden(x_rep)
+        y1_pred = self.y1_hidden(x_rep)
+        y2_pred = self.y2_hidden(x_rep)
+        y3_pred = self.y3_hidden(x_rep)
+        y4_pred = self.y4_hidden(x_rep)
+        y5_pred = self.y5_hidden(x_rep)
+        y6_pred = self.y6_hidden(x_rep)
+
+        epsilons = self.epsilon_layer(t_pred)
+        
+        return y0_pred, y1_pred, y2_pred, y3_pred, y4_pred, y5_pred, y6_pred, t_pred, epsilons
+

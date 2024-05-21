@@ -104,7 +104,7 @@ parser.add_argument("--cutoff_dataset",
 parser.add_argument(
     "--model",
     type=str, default='cet',
-    choices=["cet", "cevae", "transformer", "linear", "ridge", "mlp", "svr", "rfr"],
+    choices=["cet", "cevae", "transformer", "linear", "ridge", "mlp", "svr", "rfr", 'tarnet', 'dragonnet', 'iTransformer'],
     help="model name (default : cet)")
 
 parser.add_argument("--save_path",
@@ -242,9 +242,13 @@ if args.ignore_wandb == False:
 ## Load Data --------------------------------------------------------------------------------
 ### ./data/data_mod.ipynb 에서 기본적인 데이터 전처리  ###
 if args.is_synthetic:
+    # with open('./data/synthetic/synthetic_ts.pkl', 'rb') as f:
+    #     data = pickle.load(f)
+    # dataset = utils.SyntheticTimeSeriesDataset(args, data)
+    
+    print('using synthetic data')
     with open('./data/synthetic/synthetic_dowhy.pkl', 'rb') as f:
         data = pickle.load(f)
-    # dataset = utils.SyntheticTimeSeriesDataset(args, data)
     dataset = utils.SyntheticDataset(args, data)
 else:
     dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
@@ -308,11 +312,34 @@ if args.model == 'cevae':
     assert(args.single_treatment == True)
     model = models.CEVAE(args).to(args.device) 
 
-elif args.model == "mlp":
+if args.model == "mlp":
     model = models.MLPRegressor(args=args).to(args.device)
 
-elif args.model in ["linear", "ridge"]:
+if args.model in ["linear", "ridge"]:
     model = models.LinearRegression(args=args).to(args.device)
+
+if args.model == 'tarnet':
+    model = models.TarNet(args = args,
+                        input_size = args.num_features,
+                        hidden_size = args.hidden_dim,
+                        output_size = args.output_size,
+                        disable_embedding = args.disable_embedding).to(args.device)
+    
+if args.model == 'dragonnet':
+    model = models.DragonNet(args=args,
+                        input_size = args.num_features,
+                        hidden_size = args.hidden_dim,
+                        output_size = args.output_size,
+                        disable_embedding = args.disable_embedding).to(args.device)
+
+if args.model == 'iTransformer':
+    model = models.iTransformer(args=args,
+                               input_size=args.num_features, 
+                               hidden_size=args.hidden_dim, 
+                               output_size=args.output_size, 
+                               num_layers=args.num_layers, 
+                               num_heads=args.num_heads, 
+                               drop_out=args.drop_out,).to(args.device)
 
 elif args.model in ["svr", "rfr"]:
     args.device = torch.device("cpu")
@@ -564,15 +591,17 @@ for epoch in range(1, args.epochs + 1):
         best_val_models[i] = eval_model
         best_tr_models[i] = tr_eval_model
         
-        best_model = model
+        # best_model = model
+        best_model_weights = {key: value.clone() for key, value in model.state_dict().items()}
         # save state_dict
-        # os.makedirs(args.save_path, exist_ok=True)
-        # os.makedirs(f"./best_model/seed_{args.seed}", exist_ok=True)
-        # utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
-        #                     epoch = epoch,
-        #                     state_dict = model.state_dict(),
-        #                     optimizer = optimizer.state_dict(),
-        #                     )
+        os.makedirs(args.save_path, exist_ok=True)
+        save_path=f"./best_model/seed_{args.seed}" if not args.is_synthetic else f"./best_syn_model/seed_{args.seed}"
+        os.makedirs(save_path, exist_ok=True)
+        utils.save_checkpoint(file_path = f"{save_path}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
+                            epoch = epoch,
+                            state_dict = model.state_dict(),
+                            optimizer = optimizer.state_dict(),
+                            )
         
         if args.save_pred:
             # save prediction and ground truth as csv
@@ -659,9 +688,13 @@ for epoch in range(1, args.epochs + 1):
         wandb.log(wandb_log)
 # ---------------------------------------------------------------------------------------------
 
+model.load_state_dict(best_model_weights)
 # Estimate Population average treatment effects
-negative_acc_y_t1, negative_acc_d_t1, ce_y_t1, ce_d_t1 = utils.CE(args, best_model, val_dataloader, 't1')
-negative_acc_y_t2, negative_acc_d_t2, ce_y_t2, ce_d_t2 = utils.CE(args, best_model, val_dataloader, 't2')
+negative_acc_y_t1, negative_acc_d_t1, ce_y_t1, ce_d_t1 = utils.CE(args, model, val_dataloader, 't1')
+negative_acc_y_t2, negative_acc_d_t2, ce_y_t2, ce_d_t2 = utils.CE(args, model, val_dataloader, 't2')
+pehe_y, ate_error_y = utils.PEHE(args, model, val_dataloader, 't2')
+
+# utils.save_posterior(tr_dataloader, model, f'/data1/bubble3jh/cluster-regression/data/synthetic/synthetic_dowhy_posterior_{args.model}.pkl')
 
 ## Print Best Model ---------------------------------------------------------------------------
 print(f"Best {args.model} achieved [d:{best_test_losses[args.table_idx][0]}, y:{best_test_losses[args.table_idx][1]}] on {best_epochs[args.table_idx]} epoch!!")
@@ -696,6 +729,8 @@ if args.ignore_wandb == False:
     wandb.run.summary["CE_y (t2)"] = ce_y_t2
     wandb.run.summary["CE_d (t1)"] = ce_d_t1
     wandb.run.summary["CE_d (t2)"] = ce_d_t2
+    wandb.run.summary["pehe_y (t2)"] = pehe_y
+    wandb.run.summary["ate_error_y (t2)"] = ate_error_y
     wandb.run.summary["CACC_y (t1)"] = negative_acc_y_t1
     wandb.run.summary["CACC_y (t2)"] = negative_acc_y_t2
     wandb.run.summary["CACC_d (t1)"] = negative_acc_d_t1

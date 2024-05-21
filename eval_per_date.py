@@ -104,7 +104,7 @@ parser.add_argument("--cutoff_dataset",
 parser.add_argument(
     "--model",
     type=str, default='transformer',
-    choices=["cet", "transformer", "linear", "ridge", "mlp", "svr", "rfr"],
+    choices=["cet", "cevae", "transformer", "linear", "ridge", "mlp", "svr", "rfr"],
     help="model name (default : transformer)")
 
 parser.add_argument("--save_path",
@@ -242,7 +242,7 @@ if args.ignore_wandb == False:
 ## Load Data --------------------------------------------------------------------------------
 ### ./data/data_mod.ipynb 에서 기본적인 데이터 전처리  ###
 if args.is_synthetic:
-    with open('./data/synthetic/synthetic_ts.pkl', 'rb') as f:
+    with open('./data/synthetic/synthetic_dowhy.pkl', 'rb') as f:
         data = pickle.load(f)
     dataset = utils.SyntheticTimeSeriesDataset(args, data)
 else:
@@ -301,6 +301,11 @@ if args.model == 'cet':
     assert(args.use_treatment == True)
     model = models.CETransformer(args).to(args.device) 
 
+if args.model == 'cevae':
+    assert(args.use_treatment == True)
+    assert(args.single_treatment == True)
+    model = models.CEVAE(args).to(args.device) 
+    
 elif args.model == "mlp":
     model = models.MLPRegressor(args=args).to(args.device)
 
