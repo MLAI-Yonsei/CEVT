@@ -478,7 +478,7 @@ def test(args, data, model, scaling, a_y, b_y, a_d, b_d, use_treatment=False, MC
     max_unique_tensor = torch.tensor([batch.unique().max() for batch in diff_days], device='cuda:0') + 1
 
     accumulated_outputs = [0] * 6  # (x, x_reconstructed, enc_yd_pred, enc_t_pred, dec_yd_pred, dec_t_pred)
-
+    
     if use_treatment:
         gt_t = rest[0]
         if args.model=='cet' or 'cevae':

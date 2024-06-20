@@ -53,4 +53,4 @@ print("-" * 30)
 print(f"{'Config Key':<15} | {'Config Value':<15}")
 print("-" * 30)
 for key, value in best_run.config.items():
-    print(f"{key:<15} | {value:<15}")
+    print(f"{key:<15} | {value:<15}") 
