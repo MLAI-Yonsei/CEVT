@@ -717,55 +717,6 @@ class customTransformerEncoder(TransformerEncoder):
         why_not_sparsity_fast_path = ''
         str_first_layer = "self.layers[0]"
         batch_first = first_layer.self_attn.batch_first
-        # if not hasattr(self, "use_nested_tensor"):
-        #     why_not_sparsity_fast_path = "use_nested_tensor attribute not present"
-        # elif not self.use_nested_tensor:
-        #     why_not_sparsity_fast_path = "self.use_nested_tensor (set in init) was not True"
-        # elif first_layer.training:
-        #     why_not_sparsity_fast_path = f"{str_first_layer} was in training mode"
-        # elif not src.dim() == 3:
-        #     why_not_sparsity_fast_path = f"input not batched; expected src.dim() of 3 but got {src.dim()}"
-        # elif src_key_padding_mask is None:
-        #     why_not_sparsity_fast_path = "src_key_padding_mask was None"
-        # elif (((not hasattr(self, "mask_check")) or self.mask_check)
-        #         and not torch._nested_tensor_from_mask_left_aligned(src, src_key_padding_mask.logical_not())):
-        #     why_not_sparsity_fast_path = "mask_check enabled, and src and src_key_padding_mask was not left aligned"
-        # elif output.is_nested:
-        #     why_not_sparsity_fast_path = "NestedTensor input is not supported"
-        # elif mask is not None:
-        #     why_not_sparsity_fast_path = "src_key_padding_mask and mask were both supplied"
-        # elif torch.is_autocast_enabled():
-        #     why_not_sparsity_fast_path = "autocast is enabled"
-
-        # if not why_not_sparsity_fast_path:
-        #     tensor_args = (
-        #         src,
-        #         first_layer.self_attn.in_proj_weight,
-        #         first_layer.self_attn.in_proj_bias,
-        #         first_layer.self_attn.out_proj.weight,
-        #         first_layer.self_attn.out_proj.bias,
-        #         first_layer.norm1.weight,
-        #         first_layer.norm1.bias,
-        #         first_layer.norm2.weight,
-        #         first_layer.norm2.bias,
-        #         first_layer.linear1.weight,
-        #         first_layer.linear1.bias,
-        #         first_layer.linear2.weight,
-        #         first_layer.linear2.bias,
-        #     )
-        #     _supported_device_type = ["cpu", "cuda", torch.utils.backend_registration._privateuse1_backend_name]
-        #     if torch.overrides.has_torch_function(tensor_args):
-        #         why_not_sparsity_fast_path = "some Tensor argument has_torch_function"
-        #     elif src.device.type not in _supported_device_type:
-        #         why_not_sparsity_fast_path = f"src device is neither one of {_supported_device_type}"
-        #     elif torch.is_grad_enabled() and any(x.requires_grad for x in tensor_args):
-        #         why_not_sparsity_fast_path = ("grad is enabled and at least one of query or the "
-        #                                       "input/output projection weights or biases requires_grad")
-
-        #     if (not why_not_sparsity_fast_path) and (src_key_padding_mask is not None):
-        #         convert_to_nested = True
-        #         output = torch._nested_tensor_from_mask(output, src_key_padding_mask.logical_not(), mask_check=False)
-        #         src_key_padding_mask_for_layers = None
 
         seq_len = _get_seq_len(src, batch_first)
         is_causal = _detect_is_causal_mask(mask, is_causal, seq_len)
@@ -883,12 +834,6 @@ class CETransformer(nn.Module):
         self.zt2yd = MLP(d_model, d_model//2, 2, num_layers=pred_layers)
 
         self.linear_decoder = MLP(d_model, d_model, d_model, num_layers=1) # Linear
-        # self.init_weights(1)
-
-    # def generate_square_subsequent_mask(self, sz):
-    #     mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
-    #     mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
-    #     return mask
     
     def generate_square_subsequent_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
@@ -914,22 +859,6 @@ class CETransformer(nn.Module):
                     layer.weight.data.uniform_(-initrange, initrange)
                     if layer.bias is not None:
                         layer.bias.data.zero_()
-        
-        # For variational layers
-        # for fc in [self.fc_mu]:
-        #     for layer in fc.layers:
-        #         if isinstance(layer, nn.Linear):
-        #             layer.weight.data.zero_() 
-        #             if layer.bias is not None:
-        #                 layer.bias.data.zero_()
-
-        # # For variational layers
-        # for fc in [self.fc_logvar]:
-        #     for layer in fc.layers:
-        #         if isinstance(layer, nn.Linear):
-        #             layer.weight.data = (torch.log(c) * torch.ones_like(layer.weight.data)).requires_grad_(True)
-        #             if layer.bias is not None:
-        #                 layer.bias.data.zero_()
 
     def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_MAP=False):
         # Encoder
@@ -1057,8 +986,6 @@ class TableEmbedding_iTrans(torch.nn.Module):
         else:
             return (x, diff_days, val_len), None
 
-
-
 class Encoder_iTrans(nn.Module):
     def __init__(self, attn_layers, conv_layers=None, norm_layer=None):
         super(Encoder_iTrans, self).__init__()
@@ -1082,8 +1009,6 @@ class Encoder_iTrans(nn.Module):
             x = self.norm(x)
 
         return x
-
-
 
 class EncoderLayer_iTrans(nn.Module):
     def __init__(self, attention, d_model, dropout=0.1):
@@ -1110,8 +1035,6 @@ class EncoderLayer_iTrans(nn.Module):
         y = self.dropout(self.conv2(y).transpose(-1, 1))
 
         return self.norm2(x + y)
-
-
 
 class AttentionLayer_iTrans(nn.Module):
     def __init__(self, attention, d_model, n_heads):

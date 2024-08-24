@@ -712,8 +712,185 @@ def CE(args, model, dataloader, intervene_var):
                     delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
                 elif intervene_var == 't2':
                     delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
-                     
+                
                 delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+        
+                for i in range(delta_y.size(0)):
+                    data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                    data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+    
+    def calculate_gradients_and_effect(data_points, method='coef'):
+        # 데이터 변환
+        del_t = data_points[:, 0]  # delta_t
+        del_var = data_points[:, 1]  # delta_y 또는 delta_d
+
+        non_zero_indices = del_t != 0
+        del_t = del_t[non_zero_indices]
+        del_var = del_var[non_zero_indices]
+        
+        # 기울기 계산 및 음수 기울기 비율 계산
+        gradients = del_var / del_t
+        negative_acc = np.sum(gradients < 0) / len(gradients)
+        
+        if method == 'grad':
+            # 선형 회귀 모델을 통한 처리 효과 계산
+            model = LinearRegression()
+            model.fit(del_t.reshape(-1, 1), del_var)
+            treatment_effect = model.coef_[0]
+        elif method == 'mean':
+            treatment_effect = np.mean(gradients)
+            
+        return negative_acc, treatment_effect
+
+    negative_acc_y, ce_y = calculate_gradients_and_effect(np.array(data_points_y), method = 'mean')
+    negative_acc_d, ce_d = calculate_gradients_and_effect(np.array(data_points_d), method = 'mean')
+    
+    print(f"CE y : {ce_y:.3f}, CE d : {ce_d:.3f}")
+    print(f"CACC y : {negative_acc_y:.3f}, CACC d : {negative_acc_d:.3f}")
+
+    return negative_acc_y, negative_acc_d, ce_y, ce_d
+
+@torch.no_grad()
+def CE_worstcase(args, model, dataloader, intervene_var):
+    model.eval()  
+    data_points_y = []; data_points_d=[]
+    
+    for data in dataloader:
+        _, cont_p, cont_c, cat_p, cat_c, val_len, y, diff_days, *rest = data_load(data)
+        gt_t = rest[0]
+        
+        if args.use_treatment:
+            if args.model == 'cet':
+                # Model의 encoder 부분에서 t와 yd를 예측하고 이 값을 사용하니, Transformer encoder 부분만 불러와서 forward
+                if args.is_synthetic:
+                    # x = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days).unsqueeze(1)
+                    (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                else:
+                    (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                src_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
+                src_mask = model.generate_square_subsequent_mask(x.size(1)).cuda() if model.unidir else None
+
+                # Input X를 기반으로 하는 encoder의 예측치 t를 original t 로 사용
+                
+                # use original prediction with x2t_pred
+                # _, original_t, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len)
+
+                # use ground truth t instead of x2t_pred
+                original_t = gt_t[:,0].unsqueeze(1) if intervene_var == 't1' else gt_t[:,1].unsqueeze(1)
+                _, _, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=(intervene_var,original_t))
+                
+                saved_original_t = original_t.clone()
+                saved_original_enc_yd = original_enc_yd.clone()
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    original_t=saved_original_t.clone()
+                    original_enc_yd=saved_original_enc_yd.clone()
+                    
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                        elif intervene_var == 't2':
+                            intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    
+                    # intervene_t를 배치 크기와 같은 텐서로 생성
+                    intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
+                    # 이제 intervene_t를 모델에 전달
+                    _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=(intervene_var,intervene_t))
+                    
+                    delta_y = original_enc_yd - intervene_enc_yd
+                    delta_t = (original_t - intervene_t)
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
+                        
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+            
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+            if args.model == 'cevae': 
+                x = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+
+                original_t = gt_t
+                _, _, original_enc_yd, _ = model.encoder(x, t_gt=original_t)
+                
+                saved_original_t = original_t.clone()
+                saved_original_enc_yd = original_enc_yd.clone()
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    original_t=saved_original_t.clone()
+                    original_enc_yd=saved_original_enc_yd.clone()
+                    
+                    if intervene_var == 't1':
+                        intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    elif intervene_var == 't2':
+                        intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+
+                    
+                    # intervene_t를 배치 크기와 같은 텐서로 생성
+                    intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).cuda()
+                    # 이제 intervene_t를 모델에 전달
+                    _, _, intervene_enc_yd, _ = model.encoder(x, t_gt=intervene_t)
+                    
+                    delta_y = original_enc_yd - intervene_enc_yd
+                    if intervene_var == 't1':
+                        delta_t = (original_t - intervene_t)*6  # denormalize 
+                    elif intervene_var == 't2':
+                        delta_t = (original_t - intervene_t)*8  # +3 denormalize 
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+            
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+        else:
+            original_t = cont_c[:,:,0].clone() if intervene_var=='t1' else cont_c[:,:,1].clone()
+            if args.model == 'cet':
+                _, _, (original_yd, _), (_, _), (_, _) = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            else:
+                original_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            original_yd = torch.clamp(original_yd, 0, 1)
+            
+            if args.is_synthetic:       
+                intervene_t_value_range = range(0, 11)
+            else:
+                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+            for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                
+                if intervene_var == 't1':
+                    intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    cont_c[:,:,0] = intervene_t_value 
+                elif intervene_var == 't2':
+                    intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,1] = intervene_t_value 
+        
+                # 이제 intervene_t를 모델에 전달 
+                intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                
+                # for fair comaparison
+                intervene_yd = torch.clamp(intervene_yd, 0, 1)
+                
+                delta_y = original_yd - intervene_yd
+                # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                if intervene_var == 't1':
+                    delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                elif intervene_var == 't2':
+                    delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
+                
+                delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.a_y, dataloader.dataset.b_y, dataloader.dataset.a_d, dataloader.dataset.b_d)
         
                 for i in range(delta_y.size(0)):
                     data_points_y.append((delta_t[i].item(), delta_y[i].item()))

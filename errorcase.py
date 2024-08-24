@@ -385,7 +385,9 @@ for epoch in range(1, args.epochs + 1):
                 'diff_tensor': diff_tensor,
                 'treatment': treatment,
                 'mae_d': mae_d,
-                'mae_y': mae_y
+                'mae_y': mae_y,
+                'predicted': te_predicted,
+                'gt': te_ground_truth
             }
             
             # Append the dictionary to the list
