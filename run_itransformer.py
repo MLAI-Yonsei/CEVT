@@ -9,7 +9,7 @@ import pickle
 import argparse
 import tabulate
 
-import utils, models, ml_algorithm
+import utils, models
 import wandb
 from torch.utils.data import DataLoader, random_split, ConcatDataset
 
@@ -194,43 +194,7 @@ if args.ignore_wandb == False:
     wandb.run.name = f"embed_{args.model}-{args.optim}-{args.lr_init}-{args.wd}"
        
 ## Load Data --------------------------------------------------------------------------------
-"""
-### ./data/data_mod.ipynb 에서 기본적인 데이터 전처리  ###
-# cutdates_num=0 if args.model=='cet' else 5 # 5 for baseline?
-cutdates_num=0
-tr_datasets = []; val_datasets = []; test_datasets = []; min_list=[]; max_list=[] 
-for i in range(0, cutdates_num+1):
-    data = pd.read_csv(args.data_path+f"data_cut_{i}.csv")
-    dataset = utils.Tabledata(args, data, args.scaling)
-    train_dataset, val_dataset, test_dataset = random_split(dataset, utils.data_split_num(dataset))
-    tr_datasets.append(train_dataset)
-    val_datasets.append(val_dataset)
-    test_datasets.append(test_dataset)
-train_dataset = tr_datasets[0]
-tr_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-print(f"Number of training Clusters : {len(train_dataset)}")
-val_dataloaders=[]; test_dataloaders=[]
-
-# index 0 -> all dataset / index i -> i-th data cut-off
-for i in range(cutdates_num+1):
-    val_dataset = val_datasets[i]; test_dataset = test_datasets[i]
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-    val_dataloaders.append(val_dataloader); test_dataloaders.append(test_dataloader)
-
-print("Successfully load data!")
-"""
-if args.is_synthetic:
-    # with open('./data/synthetic/synthetic_ts.pkl', 'rb') as f:
-    #     data = pickle.load(f)
-    # dataset = utils.SyntheticTimeSeriesDataset(args, data)
-    
-    print('using synthetic data')
-    with open('./data/synthetic/synthetic_dowhy.pkl', 'rb') as f:
-        data = pickle.load(f)
-    dataset = utils.SyntheticDataset(args, data)
-else:
-    dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
+dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
 train_dataset, val_dataset, test_dataset = random_split(dataset, utils.data_split_num(dataset))
 tr_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 print(f"Number of training Clusters : {len(train_dataset)}")
@@ -404,9 +368,9 @@ for epoch in range(1, args.epochs + 1):
             
             best_model = model
             # save state_dict
-            os.makedirs("./best_model/seed_1000/", exist_ok=True)
+            os.makedirs(f"./best_model/seed_{args.seed}/", exist_ok=True)
             # os.makedirs(args.save_path, exist_ok=True)
-            utils.save_checkpoint(file_path = f"./best_model/seed_1000/{args.model}-{args.optim}-{args.lr_init}-{args.wd}-date{i}_best_val.pt",
+            utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/{args.model}-{args.optim}-{args.lr_init}-{args.wd}-date{i}_best_val.pt",
                                 epoch = epoch,
                                 state_dict = model.state_dict(),
                                 optimizer = optimizer.state_dict(),
@@ -498,18 +462,8 @@ if args.ignore_wandb == False:
     
     wandb.run.summary["pehe_y (t2)"] = pehe_y
     wandb.run.summary["ate_error_y (t2)"] = ate_error_y
-    # wandb.run.summary["CE_y (t1)"] = ce_y_t1
     wandb.run.summary["CE_y (t2)"] = ce_y_t2
-    # wandb.run.summary["CE_d (t1)"] = ce_d_t1
     wandb.run.summary["CE_d (t2)"] = ce_d_t2
-    # wandb.run.summary["CACC_y (t1)"] = negative_acc_y_t1
     wandb.run.summary["CACC_y (t2)"] = negative_acc_y_t2
-    # wandb.run.summary["CACC_d (t1)"] = negative_acc_d_t1
     wandb.run.summary["CACC_d (t2)"] = negative_acc_d_t2
-    # wandb.run.summary["CACC_avg (t1)"] = (negative_acc_y_t1 + negative_acc_d_t1)/2
     wandb.run.summary["CACC_avg (t2)"] = (negative_acc_y_t2 + negative_acc_d_t2)/2
-
-    
-    # wandb.run.summary["tr_dat_num"] = concat_tr_num_data
-    # wandb.run.summary["val_dat_num"] : concat_val_num_data
-    # wandb.run.summary["te_dat_num"] : concat_te_num_data

@@ -103,7 +103,7 @@ parser.add_argument("--cutoff_dataset",
 # Model ---------------------------------------------------------
 parser.add_argument(
     "--model",
-    type=str, default='cet',
+    type=str, default='cevt',
     choices=["cet", "cevae", "transformer", "linear", "ridge", "mlp", "svr", "rfr", 'tarnet', 'dragonnet', 'iTransformer'],
     help="model name (default : cet)")
 
@@ -298,12 +298,11 @@ print(f"use treatment as feature : {not args.use_treatment}")
 print("Successfully load data!")
 #-------------------------------------------------------------------------------------
 
-
 ## Model ------------------------------------------------------------------------------------
 if args.model == 'transformer':
     model = models.Transformer(args).to(args.device)
     
-if args.model == 'cet':
+if args.model == 'cevt':
     assert(args.use_treatment == True)
     model = models.CETransformer(args).to(args.device) 
     
@@ -340,10 +339,6 @@ if args.model == 'iTransformer':
                                num_layers=args.num_layers, 
                                num_heads=args.num_heads, 
                                drop_out=args.drop_out,).to(args.device)
-
-elif args.model in ["svr", "rfr"]:
-    args.device = torch.device("cpu")
-    ml_algorithm.fit(args.data_path, args.model, args.ignore_wandb, cutdates_num, args.table_idx)
 
 print(f"Successfully prepared {args.model} model")
 # ---------------------------------------------------------------------------------------------
@@ -385,7 +380,6 @@ else:
 ## Training Phase -----------------------------------------------------------------------------
 columns = ["ep", "lr", f"tr_loss_d({args.eval_criterion})", f"tr_loss_y({args.eval_criterion})", f"val_loss_d({args.eval_criterion})", f"val_loss_y({args.eval_criterion})",
            "te_loss_d(MAE)", "te_loss_y(MAE)", "te_loss_d(RMSE)", "te_loss_y(RMSE)", "eval_model"]
-## print table index, 0 = cocnated data
 cutdates_num=0
 best_epochs=[0] * (cutdates_num+1) 
 best_val_loss_d = [9999] * (cutdates_num+1); best_val_loss_y = [9999] * (cutdates_num+1); best_val_loss_t1 = [9999] * (cutdates_num+1); best_val_loss_t2 = [9999] * (cutdates_num+1)
@@ -469,13 +463,7 @@ for epoch in range(1, args.epochs + 1):
             val_loss_t1, val_loss_t2 = t_loss[0], t_loss[1]       
             val_epoch_loss_t1 += val_loss_t1     
             val_epoch_loss_t2 += val_loss_t2
-            # val_epoch_loss_t += t_loss[0]
         concat_val_num_data += val_num_data
-
-        # val_pred_y_list += list(val_predicted[:,0].cpu().detach().numpy())
-        # val_gt_y_list += list(val_ground_truth[:,0].cpu().detach().numpy())
-        # val_pred_d_list += list(val_predicted[:,1].cpu().detach().numpy())
-        # val_gt_d_list += list(val_ground_truth[:,1].cpu().detach().numpy())
 
     # Calculate Epoch loss
     val_loss_d = val_epoch_loss_d / concat_val_num_data
@@ -489,7 +477,6 @@ for epoch in range(1, args.epochs + 1):
     # save list for all cut-off dates
     val_loss_d_list.append(val_loss_d)
     val_loss_y_list.append(val_loss_y)
-    # val_loss_t_list.append(val_loss_t)
     val_loss_t1_list.append(val_loss_t1)
     val_loss_t2_list.append(val_loss_t2)
     
@@ -512,14 +499,6 @@ for epoch in range(1, args.epochs + 1):
         te_mse_epoch_loss_y += te_mse_batch_loss_y
         concat_te_num_data += te_num_data
 
-        # Restore Prediction and Ground Truth
-        # te_pred_y, te_pred_d, te_gt_y, te_gt_d= utils.reverse_scaling(args.scaling, te_predicted, te_ground_truth, test_dataset.dataset.a_y, test_dataset.dataset.b_y, test_dataset.dataset.a_d, test_dataset.dataset.b_d)
-
-        # te_pred_y_list += list(te_pred_y.cpu().detach().numpy())
-        # te_gt_y_list += list(te_gt_y.cpu().detach().numpy())
-        # te_pred_d_list += list(te_pred_d.cpu().detach().numpy())
-        # te_gt_d_list += list(te_gt_d.cpu().detach().numpy())
-
     # Calculate Epoch loss
     te_mae_loss_d = te_mae_epoch_loss_d / concat_te_num_data
     te_mae_loss_y = te_mae_epoch_loss_y / concat_te_num_data
@@ -537,45 +516,6 @@ for epoch in range(1, args.epochs + 1):
     # Save Best Model (Early Stopping)
     i=0
     if val_loss_d + val_loss_y < best_val_loss_d[i] + best_val_loss_y[i]:
-        # if args.eval_per_cutoffs:
-        #     best_cutoffs_mae_d={}
-        #     best_cutoffs_mae_y={}
-        #     best_cutoffs_mae_t1={}
-        #     best_cutoffs_mae_t2={}
-        #     best_cutoffs_rmse_d={}
-        #     best_cutoffs_rmse_y={}
-            
-        #     for eval_key, gtest_dataloader in grouped_dataloaders.items():
-        #         for _, data in enumerate(gtest_dataloader):
-        #             cuteval_te_mae_batch_loss_d, cuteval_te_mae_batch_loss_y, cuteval_te_mse_batch_loss_d, cuteval_te_mse_batch_loss_y, cuteval_te_num_data, cuteval_te_predicted, cuteval_te_ground_truth, *cuteval_t_loss = utils.test(args, data, model,
-        #                                                                     args.scaling, test_dataset.dataset.a_y, test_dataset.dataset.b_y,
-        #                                                                     test_dataset.dataset.a_d, test_dataset.dataset.b_d, use_treatment=args.use_treatment, MC_sample=args.MC_sample)
-        #             cuteval_te_mae_epoch_loss_d = cuteval_te_mae_batch_loss_d
-        #             cuteval_te_mae_epoch_loss_y = cuteval_te_mae_batch_loss_y
-        #             if args.use_treatment:
-        #                 # te_mae_epoch_loss_t += t_loss[0]
-        #                 cuteval_te_loss_t1, cuteval_te_loss_t2 = cuteval_t_loss[0], cuteval_t_loss[1]      
-        #                 cuteval_te_mae_epoch_loss_t1 = cuteval_te_loss_t1     
-        #                 cuteval_te_mae_epoch_loss_t2 = cuteval_te_loss_t2
-                        
-        #             cuteval_te_mse_epoch_loss_d = cuteval_te_mse_batch_loss_d
-        #             cuteval_te_mse_epoch_loss_y = cuteval_te_mse_batch_loss_y
-        #             cuteval_concat_te_num_data = cuteval_te_num_data
-
-        #         # Calculate Epoch loss
-        #         cuteval_te_mae_loss_d = cuteval_te_mae_epoch_loss_d / cuteval_concat_te_num_data
-        #         cuteval_te_mae_loss_y = cuteval_te_mae_epoch_loss_y / cuteval_concat_te_num_data
-        #         cuteval_te_mae_loss_t1 = cuteval_te_mae_epoch_loss_t1 * 6 / cuteval_concat_te_num_data
-        #         cuteval_te_mae_loss_t2 = (cuteval_te_mae_epoch_loss_t2 * 8 + 3) / cuteval_concat_te_num_data
-        #         cuteval_te_rmse_loss_d = math.sqrt(cuteval_te_mse_epoch_loss_d / cuteval_concat_te_num_data)
-        #         cuteval_te_rmse_loss_y = math.sqrt(cuteval_te_mse_epoch_loss_y / cuteval_concat_te_num_data)
-                
-        #         best_cutoffs_mae_d[eval_key]=cuteval_te_mae_loss_d
-        #         best_cutoffs_mae_y[eval_key]=cuteval_te_mae_loss_y
-        #         best_cutoffs_mae_t1[eval_key]=cuteval_te_mae_loss_t1
-        #         best_cutoffs_mae_t2[eval_key]=cuteval_te_mae_loss_t2
-        #         best_cutoffs_rmse_d[eval_key]=cuteval_te_rmse_loss_d
-        #         best_cutoffs_rmse_y[eval_key]=cuteval_te_rmse_loss_y
             
         best_epochs[i] = epoch
         best_val_loss_d[i] = val_loss_d
@@ -595,13 +535,11 @@ for epoch in range(1, args.epochs + 1):
         best_model_weights = {key: value.clone() for key, value in model.state_dict().items()}
         # save state_dict
         os.makedirs(args.save_path, exist_ok=True)
-        # save_path=f"./best_model_errorcase/seed_{args.seed}" if not args.is_synthetic else f"./best_syn_model/seed_{args.seed}"
-        # os.makedirs(save_path, exist_ok=True)
-        # utils.save_checkpoint(file_path = f"{save_path}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
-        #                     epoch = epoch,
-        #                     state_dict = model.state_dict(),
-        #                     optimizer = optimizer.state_dict(),
-        #                     )
+        utils.save_checkpoint(file_path = f"{args.save_path}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
+                            epoch = epoch,
+                            state_dict = model.state_dict(),
+                            optimizer = optimizer.state_dict(),
+                            )
         
         if args.save_pred:
             # save prediction and ground truth as csv
@@ -657,17 +595,7 @@ for epoch in range(1, args.epochs + 1):
         "concat/test_y (rmse)": test_rmse_y_list[0],
         "setting/lr": lr,
         "setting/kld_lambda": args.lambdas[1]
-        # "pred/tr_pred_y": wandb.Histogram(tr_pred_y_list),
-        # "gt/tr_gt_y": wandb.Histogram(tr_gt_y_list),
-        # "pred/tr_pred_d": wandb.Histogram(tr_pred_d_list),
-        # "gt/tr_gt_d": wandb.Histogram(tr_gt_d_list)
     }
-        # for name, param in model.named_parameters():
-        #     wandb_log[f"param_stats/{name}_min"] = param.data.min().item()
-        #     wandb_log[f"param_stats/{name}_max"] = param.data.max().item()
-        #     wandb_log[f"param_stats/{name}_mean"] = param.data.mean().item()
-        #     wandb_log[f"param_stats/{name}_variance"] = param.data.var().item()
-
 
         for i in range(1, cutdates_num+1):
             wandb_log.update({
@@ -694,14 +622,11 @@ negative_acc_y_t1, negative_acc_d_t1, ce_y_t1, ce_d_t1 = utils.CE(args, model, v
 negative_acc_y_t2, negative_acc_d_t2, ce_y_t2, ce_d_t2 = utils.CE(args, model, val_dataloader, 't2')
 pehe_y, ate_error_y = utils.PEHE(args, model, val_dataloader, 't2')
 
-# utils.save_posterior(tr_dataloader, model, f'/data1/bubble3jh/cluster-regression/data/synthetic/synthetic_dowhy_posterior_{args.model}.pkl')
-
 ## Print Best Model ---------------------------------------------------------------------------
 print(f"Best {args.model} achieved [d:{best_test_losses[args.table_idx][0]}, y:{best_test_losses[args.table_idx][1]}] on {best_epochs[args.table_idx]} epoch!!")
 print(f"The model saved as '{args.save_path}{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}_best_val.pt'!!")
 if args.ignore_wandb == False:
     for i in range(cutdates_num+1):
-        # date_key = "concat" if i == 0 else f"date_{i}"
         date_key = ""
         wandb.run.summary[f"best_epoch {date_key}"] = best_epochs[i]
         wandb.run.summary[f"best_tr_models {date_key}"] = best_tr_models[i]
@@ -717,14 +642,7 @@ if args.ignore_wandb == False:
         wandb.run.summary[f"best_test_rmse_loss (d)"] = best_test_losses[i][2]
         wandb.run.summary[f"best_test_rmse_loss (y)"] = best_test_losses[i][3]
         wandb.run.summary[f"best_test_rmse_loss"] = best_test_losses[i][2] + best_test_losses[i][3]
-    # if args.eval_per_cutoffs:
-    #     for eval_key in grouped_dataloaders.keys():
-    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_mae_loss (d)"] = best_cutoffs_mae_d[eval_key]
-    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_mae_loss (y)"] = best_cutoffs_mae_y[eval_key]
-    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_mae_loss (t1)"] = best_cutoffs_mae_t1[eval_key]
-    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_mae_loss (t2)"] = best_cutoffs_mae_t2[eval_key]
-    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_rmse_loss (d)"] = best_cutoffs_rmse_d[eval_key]
-    #         wandb.run.summary[f"best_test_cutoffs_{eval_key}_rmse_loss (y)"] = best_cutoffs_rmse_y[eval_key]
+    
     wandb.run.summary["CE_y (t1)"] = ce_y_t1
     wandb.run.summary["CE_y (t2)"] = ce_y_t2
     wandb.run.summary["CE_d (t1)"] = ce_d_t1
@@ -737,7 +655,4 @@ if args.ignore_wandb == False:
     wandb.run.summary["CACC_d (t2)"] = negative_acc_d_t2
     wandb.run.summary["CACC_avg (t1)"] = (negative_acc_y_t1 + negative_acc_d_t1)/2
     wandb.run.summary["CACC_avg (t2)"] = (negative_acc_y_t2 + negative_acc_d_t2)/2
-    wandb.run.summary["tr_dat_num"] = concat_tr_num_data
-    # wandb.run.summary["val_dat_num"] : concat_val_num_data
-    # wandb.run.summary["te_dat_num"] : concat_te_num_data
 # ---------------------------------------------------------------------------------------------
