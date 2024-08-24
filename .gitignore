@@ -7,4 +7,3 @@ vis
 ray_tune.py
 viz.py
 best_model/*
-data
