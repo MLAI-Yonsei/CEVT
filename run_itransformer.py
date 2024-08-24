@@ -33,10 +33,7 @@ parser.add_argument(
     type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
     help="Cluster Date print date (Default : 0) if 0, use concated dataset"
 )
-
-parser.add_argument("--filter_out_clip", action='store_true',
-        help = "Filter out clamped data points when calculate causal effect (Default : False)")
-
+ 
 
 
 # Data ---------------------------------------------------------
@@ -187,7 +184,7 @@ print(f"Device : {args.device}")
 
 ## Set wandb ---------------------------------------------------------------------------
 if args.ignore_wandb == False:
-    wandb.init(entity="mlai_medical_ai", project="cluster-regression", group=args.run_group)
+    wandb.init(entity="your_entity", project="your_project", group=args.run_group)
     wandb.config.update(args)
     wandb.run.name = f"embed_{args.model}-{args.optim}-{args.lr_init}-{args.wd}"
        

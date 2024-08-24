@@ -36,10 +36,7 @@ parser.add_argument(
     type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
     help="Cluster Date print date (Default : 0) if 0, use concated dataset"
 )
-
-parser.add_argument("--filter_out_clip", action='store_true',
-        help = "Filter out clamped data points when calculate causal effect (Default : False)")
-
+ 
 # Data ---------------------------------------------------------
 parser.add_argument(
     "--data_path",
@@ -96,7 +93,7 @@ parser.add_argument(
     help="model name (default : cet)")
 
 parser.add_argument("--save_path",
-            type=str, default="./best_models/",
+            type=str, default="./best_model/",
             help="Path to save best model dict")
 
 parser.add_argument(

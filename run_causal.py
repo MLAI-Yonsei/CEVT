@@ -33,10 +33,7 @@ parser.add_argument(
     type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
     help="Cluster Date print date (Default : 0) if 0, use concated dataset"
 )
-
-parser.add_argument("--filter_out_clip", action='store_true',
-        help = "Filter out clamped data points when calculate causal effect (Default : False)")
-
+ 
 
 # Data ---------------------------------------------------------
 parser.add_argument(
@@ -180,7 +177,7 @@ print(f"Device : {args.device}")
 
 ## Set wandb ---------------------------------------------------------------------------
 if args.ignore_wandb == False:
-    wandb.init(entity="mlai_medical_ai", project="cluster-regression", group=args.run_group)
+    wandb.init(entity="your_entity", project="your_project", group=args.run_group)
     wandb.config.update(args)
     if args.disable_embedding:
         wandb.run.name = f"raw_{args.model}({args.hidden_dim})-{args.optim}-{args.lr_init}-{args.wd}-{args.alpha}"
@@ -380,8 +377,8 @@ for epoch in range(1, args.epochs + 1):
             best_model = model
             # save state_dict
             # os.makedirs(args.save_path, exist_ok=True)
-            os.makedirs("./best_model/seed_1000/", exist_ok=True)
-            utils.save_checkpoint(file_path = f"./best_model/seed_1000/{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.alpha}-date{i}_best_val.pt",
+            os.makedirs(f"./best_model/seed_{args.seed}/", exist_ok=True)
+            utils.save_checkpoint(file_path = f"./best_model/seed_{args.seed}/{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.alpha}-date{i}_best_val.pt",
                                 epoch = epoch,
                                 state_dict = model.state_dict(),
                                 optimizer = optimizer.state_dict(),
