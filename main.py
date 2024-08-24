@@ -10,10 +10,9 @@ import math
 import argparse
 import tabulate
 
-import utils, models, ml_algorithm
+import utils, models
 import wandb
-from torch.utils.data import DataLoader, random_split, ConcatDataset, Subset, TensorDataset
-from collections import defaultdict
+from torch.utils.data import DataLoader, random_split
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -48,15 +47,6 @@ parser.add_argument(
     default='./data/',
     help="path to datasets location",)
 
-# parser.add_argument("--tr_ratio", type=float, default=0.8,
-#           help="Ratio of train data (Default : 0.8)")
-
-# parser.add_argument("--val_ratio", type=float, default=0.1,
-#           help="Ratio of validation data (Default : 0.1)")
-
-# parser.add_argument("--te_ratio", type=float, default=0.1,
-#           help="Ratio of test data (Default : 0.1)")
-
 parser.add_argument(
     "--batch_size",
     type=int, default=32,
@@ -81,8 +71,6 @@ parser.add_argument(
     "--use_treatment", action='store_true', help='If True, use treatment as x feature'
 )
 
-# parser.add_argument("--treatment_var", type=str, default='danger', choices=['dis, danger'], help="treatment variable")
-
 parser.add_argument('--single_treatment', action='store_true', help='use only <dis> variable as treatment (default false)')
 
 parser.add_argument('--shift', action='store_true', help='do not use treatment as feature (default false)')
@@ -104,7 +92,7 @@ parser.add_argument("--cutoff_dataset",
 parser.add_argument(
     "--model",
     type=str, default='cevt',
-    choices=["cet", "cevae", "transformer", "linear", "ridge", "mlp", "svr", "rfr", 'tarnet', 'dragonnet', 'iTransformer'],
+    choices=["cevt", "cevae", "transformer", "linear", "ridge", "mlp", 'tarnet', 'dragonnet', 'iTransformer'],
     help="model name (default : cet)")
 
 parser.add_argument("--save_path",
@@ -217,8 +205,6 @@ parser.add_argument(
     type=str, default='t1', choices=["t1", "t2"],
     help="Intervention variable for Causal Effect Estimation (default : t1)")
 
-parser.add_argument('--is_synthetic', action='store_true', help='use synthetic dataset (default false)')
-
 args = parser.parse_args()
 ## ----------------------------------------------------------------------------------------------------
 
@@ -232,7 +218,7 @@ print(f"Device : {args.device}")
 
 ## Set wandb ---------------------------------------------------------------------------
 if args.ignore_wandb == False:
-    wandb.init(entity="mlai_medical_ai", project="cluster-regression", group=args.run_group)
+    wandb.init(entity="your_entity", project="your_project", group=args.run_group)
     wandb.config.update(args)
     if args.disable_embedding:
         wandb.run.name = f"raw_{args.model}({args.hidden_dim})-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}"
@@ -240,18 +226,7 @@ if args.ignore_wandb == False:
         wandb.run.name = f"embed_{args.model}({args.hidden_dim})-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}"
        
 ## Load Data --------------------------------------------------------------------------------
-### ./data/data_mod.ipynb 에서 기본적인 데이터 전처리  ###
-if args.is_synthetic:
-    # with open('./data/synthetic/synthetic_ts.pkl', 'rb') as f:
-    #     data = pickle.load(f)
-    # dataset = utils.SyntheticTimeSeriesDataset(args, data)
-    
-    print('using synthetic data')
-    with open('./data/synthetic/synthetic_dowhy.pkl', 'rb') as f:
-        data = pickle.load(f)
-    dataset = utils.SyntheticDataset(args, data)
-else:
-    dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
+dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
 
 train_dataset, val_dataset, test_dataset = random_split(dataset, utils.data_split_num(dataset))
 tr_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
@@ -259,40 +234,6 @@ print(f"Number of training Clusters : {len(train_dataset)}")
 
 val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
 test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-
-# if args.eval_per_cutoffs:
-#     all_diff_tensors = []
-
-#     # 데이터를 순회하며 diff_tensor 수집
-#     for *features, diff_tensor, treatment in test_dataloader:
-#         all_diff_tensors.append(diff_tensor)
-
-#     # 모든 diff_tensor를 하나로 결합
-#     all_diff_tensors = torch.cat(all_diff_tensors)
-
-#     # 최대 unique diff_tensor 값을 구함
-#     max_diff = int(max(all_diff_tensors.unique()).item())
-#     # 데이터 분할을 위한 구조 초기화
-#     grouped_data = defaultdict(list)
-
-#     # 데이터를 다시 순회하며 분류
-#     for *features, diff_tensor, treatment in test_dataloader:
-#         for i in range(diff_tensor.size(0)):
-#             key = int(max(diff_tensor.squeeze()[i].unique()))
-#             grouped_data[key].append(tuple(feature[i] for feature in features) + (diff_tensor[i],) + (treatment[i],))
-
-#     # 각 diff_tensor 값별로 새로운 DataLoader 생성
-#     grouped_dataloaders = {}
-#     for key in range(max_diff + 1):
-#         if key in grouped_data:
-#             group_data = list(zip(*grouped_data[key]))
-#             tensor_datasets = [torch.stack(items) for items in group_data]
-#             dataset = TensorDataset(*tensor_datasets)
-#             grouped_dataloaders[key] = DataLoader(dataset, batch_size=len(dataset))
-
-#     # 생성된 각 DataLoader 정보 출력
-#     for key, loader in grouped_dataloaders.items():
-#         print(f'DataLoader for group {key}: {len(loader.dataset)} items')
 
 print(f"use treatment as feature : {not args.use_treatment}")
 print("Successfully load data!")
@@ -304,7 +245,7 @@ if args.model == 'transformer':
     
 if args.model == 'cevt':
     assert(args.use_treatment == True)
-    model = models.CETransformer(args).to(args.device) 
+    model = models.CEVT(args).to(args.device) 
     
 if args.model == 'cevae':
     assert(args.use_treatment == True)
@@ -318,27 +259,13 @@ if args.model in ["linear", "ridge"]:
     model = models.LinearRegression(args=args).to(args.device)
 
 if args.model == 'tarnet':
-    model = models.TarNet(args = args,
-                        input_size = args.num_features,
-                        hidden_size = args.hidden_dim,
-                        output_size = args.output_size,
-                        disable_embedding = args.disable_embedding).to(args.device)
+    raise('use run_causal.py')
     
 if args.model == 'dragonnet':
-    model = models.DragonNet(args=args,
-                        input_size = args.num_features,
-                        hidden_size = args.hidden_dim,
-                        output_size = args.output_size,
-                        disable_embedding = args.disable_embedding).to(args.device)
+    raise('use run_causal.py')
 
 if args.model == 'iTransformer':
-    model = models.iTransformer(args=args,
-                               input_size=args.num_features, 
-                               hidden_size=args.hidden_dim, 
-                               output_size=args.output_size, 
-                               num_layers=args.num_layers, 
-                               num_heads=args.num_heads, 
-                               drop_out=args.drop_out,).to(args.device)
+    raise('use run_itransformer.py')
 
 print(f"Successfully prepared {args.model} model")
 # ---------------------------------------------------------------------------------------------
@@ -620,7 +547,6 @@ model.load_state_dict(best_model_weights)
 # Estimate Population average treatment effects
 negative_acc_y_t1, negative_acc_d_t1, ce_y_t1, ce_d_t1 = utils.CE(args, model, val_dataloader, 't1')
 negative_acc_y_t2, negative_acc_d_t2, ce_y_t2, ce_d_t2 = utils.CE(args, model, val_dataloader, 't2')
-pehe_y, ate_error_y = utils.PEHE(args, model, val_dataloader, 't2')
 
 ## Print Best Model ---------------------------------------------------------------------------
 print(f"Best {args.model} achieved [d:{best_test_losses[args.table_idx][0]}, y:{best_test_losses[args.table_idx][1]}] on {best_epochs[args.table_idx]} epoch!!")
@@ -647,8 +573,6 @@ if args.ignore_wandb == False:
     wandb.run.summary["CE_y (t2)"] = ce_y_t2
     wandb.run.summary["CE_d (t1)"] = ce_d_t1
     wandb.run.summary["CE_d (t2)"] = ce_d_t2
-    wandb.run.summary["pehe_y (t2)"] = pehe_y
-    wandb.run.summary["ate_error_y (t2)"] = ate_error_y
     wandb.run.summary["CACC_y (t1)"] = negative_acc_y_t1
     wandb.run.summary["CACC_y (t2)"] = negative_acc_y_t2
     wandb.run.summary["CACC_d (t1)"] = negative_acc_d_t1

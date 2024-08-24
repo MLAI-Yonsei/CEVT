@@ -22,10 +22,7 @@ class MLPRegressor(nn.Module):
         
         if disable_embedding:
             input_size = 12
-        if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
-        else: 
-            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.layers = nn.ModuleList([nn.Linear(input_size, hidden_size, bias=True)])
         for _ in range(args.num_layers - 2):
             self.layers.append(nn.Linear(hidden_size, hidden_size, bias=True))
@@ -48,10 +45,7 @@ class LinearRegression(torch.nn.Module):
 
         if args.disable_embedding:
             input_size = 12
-        if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
-        else: 
-            self.embedding = TableEmbedding(input_size, disable_embedding = args.disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        self.embedding = TableEmbedding(input_size, disable_embedding = args.disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.linear1 = torch.nn.Linear(input_size, args.output_size)
 
     def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days):
@@ -61,21 +55,18 @@ class LinearRegression(torch.nn.Module):
 
 class Transformer(nn.Module):
     '''
-        input_size : TableEmbedding 크기
-        hidden_size : Transformer Encoder 크기
-        output_size : y, d (2)
-        num_layers : Transformer Encoder Layer 개수
-        num_heads : Multi Head Attention Head 개수
-        drop_out : DropOut 정도
-        disable_embedding : 연속 데이터 embedding 여부
+        input_size: Table embedding size
+        hidden_size: transformer encoder size
+        output_size : Y, D (2)
+        num_layers : Number of transformer encoder layers
+        num_heads : Number of multi-head attention heads
+        drop_out : Dropout degree
+        disable_embedding: Whether to embed continuous data or not
     '''
     def __init__(self, args):
         super(Transformer, self).__init__()
         
-        if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
-        else:        
-            self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
+        self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
         self.cls_token = nn.Parameter(torch.randn(1, 1, args.num_features))
         self.transformer_layer = nn.TransformerEncoderLayer(
             d_model=args.num_features,
@@ -90,7 +81,6 @@ class Transformer(nn.Module):
 
         self.init_weights()
 
-    ## Transformer Weight 초기화 방법 ##
     def init_weights(self) -> None:
         initrange = 0.1
         for module in self.embedding.modules():
@@ -135,11 +125,11 @@ class SinusoidalPositionalEncoding(nn.Module):
     
 class TableEmbedding(torch.nn.Module):
     '''
-        output_size : embedding output의 크기
-        disable_embedding : 연속 데이터의 임베딩 유무
-        disable_pe : transformer의 sequance 기준 positional encoding add 유무
-        reduction : "mean" : cluster 별 평균으로 reduction
-                    "date" : cluster 내 date 평균으로 reduction
+        output_size: Size of embedding output
+        disable_embedding: whether to embed continuous data or not
+        disable_pe: Whether to add positional encoding based on sequence of transformer
+        reduction : “mean” : Reduction to the average by cluster
+                    “date” : Reduce to the average of dates in the cluster
     '''
     def __init__(self, output_size=128, disable_embedding=False, disable_pe=True, reduction="mean", use_treatment=False):
         super().__init__()
@@ -200,13 +190,13 @@ class TableEmbedding(torch.nn.Module):
         else:
             return reduction_cluster(x, diff_days, val_len, self.reduction)
 
-class CEVAEEmbedding(torch.nn.Module):
+class CEEmbedding(torch.nn.Module):
     '''
-        output_size : embedding output의 크기
-        disable_embedding : 연속 데이터의 임베딩 유무
-        disable_pe : transformer의 sequance 기준 positional encoding add 유무
-        reduction : "mean" : cluster 별 평균으로 reduction
-                    "date" : cluster 내 date 평균으로 reduction
+        output_size: Size of embedding output
+        disable_embedding: whether to embed continuous data or not
+        disable_pe: Whether to add positional encoding based on sequence of transformer
+        reduction : “mean” : Reduction to the average by cluster
+                    “date” : Reduce to the average of dates in the cluster
     '''
     def __init__(self, args, output_size=128, disable_embedding=False, disable_pe=True, reduction="date", shift=False, use_treatment = False):
         super().__init__()
@@ -278,173 +268,7 @@ class CEVAEEmbedding(torch.nn.Module):
                 return (x, diff_days, val_len), None
         else:
             return reduction_cluster(x, diff_days, val_len, self.reduction)
-        
-class SyntheticEmbedding(torch.nn.Module):
-    '''
-        output_size : embedding output의 크기
-        disable_embedding : 연속 데이터의 임베딩 유무
-        disable_pe : transformer의 sequance 기준 positional encoding add 유무
-        reduction : "mean" : cluster 별 평균으로 reduction
-                    "date" : cluster 내 date 평균으로 reduction
-    '''
-    def __init__(self, args, output_size=128, disable_embedding=False, disable_pe=True, reduction="date", shift=False):
-        super().__init__()
-        self.shift = shift
-        self.reduction = reduction
-        self.disable_embedding = disable_embedding
-        self.disable_pe = disable_pe
-        self.use_treatment = args.use_treatment
-        activation = nn.ELU()
-        if not disable_pe:
-            self.positional_embedding  = nn.Embedding(5, output_size)
-        print("Embedding applied to data")
-        nn_dim = emb_hidden_dim = emb_dim = output_size//4
-            
-        self.x1_NN = nn.Sequential(nn.Linear(1 if self.use_treatment else 2, emb_hidden_dim),
-                            activation,
-                            nn.Linear(emb_hidden_dim, nn_dim))
-        self.x2_NN = nn.Sequential(nn.Linear(1 if self.use_treatment else 2, emb_hidden_dim),
-                                    activation,
-                                    nn.Linear(emb_hidden_dim, nn_dim))
-        self.x3_NN = nn.Sequential(nn.Linear(1, emb_hidden_dim),
-                                        activation,
-                                        nn.Linear(emb_hidden_dim, nn_dim))
-        self.x4_NN = nn.Sequential(nn.Linear(1, emb_hidden_dim),
-                                        activation,
-                                        nn.Linear(emb_hidden_dim, nn_dim))
-        
-        if not disable_pe:
-            self.positional_embedding  = nn.Embedding(6, output_size)
-
-    def forward(self, x1, x2, x3, x4, val_len, diff_days):
-        x1_emb = self.x1_NN(x1)
-        x2_emb = self.x2_NN(x2) 
-        x3_emb = self.x3_NN(x3) 
-        x4_emb = self.x4_NN(x4) 
-        
-        tensors_to_concat = [tensor for tensor in [x1_emb, x2_emb, x3_emb, x4_emb] if tensor is not None]
-        x = torch.cat(tensors_to_concat, dim=-1)
-        if not self.disable_pe:
-            x = x + self.positional_embedding(diff_days.int())
-        if self.reduction == 'none':
-            return (x, diff_days, val_len), self.positional_embedding(torch.tensor([5]).cuda())
-        else:        
-            return reduction_cluster(x, diff_days, val_len, self.reduction)
     
-# ------------------------ for yd only --embedding_dim 64 --shared_layers 1 --pred_layers 1 -n 300
-# class CEVAE_Encoder(nn.Module):
-#     def __init__(self, input_dim, latent_dim, hidden_dim=128, shared_layers=3, pred_layers=3):
-#         super(CEVAE_Encoder, self).__init__()
-                
-#         # Shared layers
-#         layers = []
-#         for _ in range(shared_layers):
-#             layers.append(nn.Linear(input_dim if len(layers) == 0 else hidden_dim, hidden_dim))
-#             layers.append(nn.ReLU())
-#         self.fc_shared = nn.Sequential(*layers)
-        
-#         # Latent variable z distribution parameters (mean and log variance)
-#         self.fc_mu = nn.Linear(hidden_dim, latent_dim)
-#         self.fc_logvar = nn.Linear(hidden_dim, latent_dim)
-        
-#         # Predict y, d with MLP
-#         yd_layers = []
-#         for _ in range(pred_layers):
-#             yd_layers.append(nn.Linear(hidden_dim if len(yd_layers) == 0 else hidden_dim, hidden_dim))
-#             yd_layers.append(nn.ReLU())
-#         yd_layers.append(nn.Linear(hidden_dim, 2))
-#         self.fc_yd = nn.Sequential(*yd_layers)
-        
-#         # Predict t with MLP
-#         t_layers = []
-#         for _ in range(pred_layers):
-#             t_layers.append(nn.Linear(hidden_dim if len(t_layers) == 0 else hidden_dim, hidden_dim))
-#             t_layers.append(nn.ReLU())
-#         t_layers.append(nn.Linear(hidden_dim, 7))
-#         self.fc_t = nn.Sequential(*t_layers)
-    
-#     def forward(self, x):
-#         h_shared = self.fc_shared(x)
-        
-#         mu = self.fc_mu(h_shared)
-#         logvar = self.fc_logvar(h_shared)
-        
-#         yd_pred = self.fc_yd(h_shared)
-#         t_pred = self.fc_t(h_shared)
-        
-#         return mu, logvar, yd_pred, t_pred
-    
-# class CEVAE_Encoder(nn.Module): # -- [train all, divided by t]
-#     def __init__(self, input_dim, latent_dim, hidden_dim=128, shared_layers=3, pred_layers=3, t_pred_layers=3, t_embed_dim=8, yd_embed_dim=8, drop_out=0, t_classes=7, skip_hidden=False):
-#         super(CEVAE_Encoder, self).__init__()
-#         # Warm up layer
-#         self.warm_up = nn.Linear(input_dim, 2) # predict only y and d
-
-#         # Shared layers
-#         layers = []
-#         for _ in range(shared_layers):
-#             layers.append(nn.Linear(input_dim if len(layers) == 0 else hidden_dim, hidden_dim))
-#             layers.append(nn.ReLU())
-#         self.fc_shared = nn.Sequential(*layers)
-        
-#         # Predict t with MLP
-#         t_layers = []
-#         for _ in range(pred_layers):
-#             t_layers.append(nn.Linear(hidden_dim if len(t_layers) == 0 else hidden_dim, hidden_dim))
-#             t_layers.append(nn.ReLU())
-#         t_layers.append(nn.Linear(hidden_dim, t_classes))
-#         self.fc_t = nn.Sequential(*t_layers)
-        
-#         # Predict yd based on t
-#         self.yd_nns = nn.ModuleList([
-#             self._build_yd_predictor(hidden_dim, pred_layers) for _ in range(t_classes)
-#         ])
-        
-#         # Calculate z (mu and logvar) based on t, yd, and x
-#         self.z_nns = nn.ModuleList([
-#             self._build_z_predictor(hidden_dim + 2, latent_dim, hidden_dim, pred_layers) for _ in range(t_classes)
-#         ])
-
-#     def _build_yd_predictor(self, hidden_dim, pred_layers):
-#         yd_layers = []
-#         for _ in range(pred_layers):
-#             yd_layers.append(nn.Linear(hidden_dim, hidden_dim))
-#             yd_layers.append(nn.ReLU())
-#         yd_layers.append(nn.Linear(hidden_dim, 2))
-#         return nn.Sequential(*yd_layers)
-    
-#     def _build_z_predictor(self, input_dim, latent_dim, hidden_dim, pred_layers):
-#         z_layers = []
-#         for _ in range(pred_layers):
-#             z_layers.append(nn.Linear(input_dim if len(z_layers) == 0 else hidden_dim, hidden_dim))
-#             z_layers.append(nn.ReLU())
-#         z_layers.extend([nn.Linear(hidden_dim, latent_dim), nn.Linear(hidden_dim, latent_dim)])
-#         return nn.ModuleDict({
-#             'mu': nn.Sequential(*z_layers[:-1]),      # pred layers hidden 공유, final layer 분리
-#             'logvar': nn.Sequential(*(z_layers[:-2] + [z_layers[-1]]))  
-#         })
-
-#     def forward(self, x, t_gt=None):
-#         h_shared = self.fc_shared(x)
-#         if t_gt==None:
-#             t_pred = self.fc_t(h_shared)
-#             t_class = t_pred.argmax(dim=1)
-#         else:
-#             t_class = t_gt
-#             t_pred = None
-#         yd_preds = [yd_nn(h_shared) for yd_nn in self.yd_nns]
-#         yd_pred = torch.stack([yd_preds[i][idx] for idx, i in enumerate(t_class)], dim=0)
-
-#         # Calculate mu and logvar based on t, yd, and x
-#         h_combined = torch.cat([h_shared, yd_pred], dim=1)
-#         z_preds = [z_nn['mu'](h_combined) for z_nn in self.z_nns]
-#         mu = torch.stack([z_preds[i][idx] for idx, i in enumerate(t_class)], dim=0)
-        
-#         z_preds_logvar = [z_nn['logvar'](h_combined) for z_nn in self.z_nns]
-#         logvar = torch.stack([z_preds_logvar[i][idx] for idx, i in enumerate(t_class)], dim=0)
-
-#         return mu, logvar, yd_pred, t_pred.squeeze()
-
 
 class CEVAE_Encoder(nn.Module): # -- [train all, conditioned by t]
     def __init__(self, input_dim, latent_dim, hidden_dim=128, shared_layers=3, pred_layers=3, t_pred_layers=3, t_embed_dim=8, yd_embed_dim=8, drop_out=0, t_classes=None, skip_hidden=False):
@@ -508,55 +332,6 @@ class CEVAE_Encoder(nn.Module): # -- [train all, conditioned by t]
         
         return mu, logvar, yd_pred, t_pred.squeeze()
 
-# class CEVAE_Decoder(nn.Module): [train seperated yd]
-#     def __init__(self, latent_dim, output_dim, hidden_dim=128, num_layers=2, t_classes=7):
-#         super(CEVAE_Decoder, self).__init__()
-        
-#         # Predict t from z
-#         t_layers = []
-#         for _ in range(num_layers):
-#             t_layers.append(nn.Linear(latent_dim if len(t_layers) == 0 else hidden_dim, hidden_dim))
-#             t_layers.append(nn.ReLU())
-#         t_layers.append(nn.Linear(hidden_dim, t_classes))
-#         self.fc_t = nn.Sequential(*t_layers)
-        
-#         # Predict y,d based on z and t
-#         self.yd_nns = nn.ModuleList([
-#             self._build_yd_predictor(latent_dim, hidden_dim, num_layers) for _ in range(t_classes)
-#         ])
-        
-#         # Directly predict x from z
-#         x_layers = []
-#         for _ in range(num_layers):
-#             x_layers.append(nn.Linear(latent_dim if len(x_layers) == 0 else hidden_dim, hidden_dim))
-#             x_layers.append(nn.ReLU())
-#         x_layers.append(nn.Linear(hidden_dim, output_dim))
-#         self.fc_x = nn.Sequential(*x_layers)
-    
-#     def _build_yd_predictor(self, latent_dim, hidden_dim, num_layers):
-#         yd_layers = []
-#         for _ in range(num_layers):
-#             yd_layers.append(nn.Linear(latent_dim if len(yd_layers) == 0 else hidden_dim, hidden_dim))
-#             yd_layers.append(nn.ReLU())
-#         yd_layers.append(nn.Linear(hidden_dim, 2))  # Assuming y,d output is of size 2
-#         return nn.Sequential(*yd_layers)
-    
-#     def forward(self, z, t_gt=None):
-#         # Predict t from z
-#         if t_gt==None:
-#             t_pred = self.fc_t(z)
-#             t_class = t_pred.argmax(dim=1)
-#         else:
-#             t_class = t_gt
-#             t_pred = None
-#         yd_preds = [yd_nn(z) for yd_nn in self.yd_nns]
-#         yd_pred = torch.stack([yd_preds[i][idx] for idx, i in enumerate(t_class)], dim=0)
-        
-#         # Directly predict x from z
-#         x_pred = self.fc_x(z)
-        
-#         return t_pred, yd_pred, x_pred
-
 class CEVAE_Decoder(nn.Module): #  [conditioned t, train overall yd]
     def __init__(self, latent_dim, output_dim, hidden_dim=128, t_pred_layers=2, shared_layers=2, t_embed_dim=16, drop_out=0, t_classes=7, skip_hidden=False):
         super(CEVAE_Decoder, self).__init__()
@@ -609,10 +384,7 @@ class CEVAE(nn.Module):
         self.unidir = args.unidir
         self.is_variational = args.variational
         
-        if not args.is_synthetic:
-            self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
-        else:
-            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
+        self.embedding = CEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
         
         self.encoder = CEVAE_Encoder(input_dim=d_model, latent_dim=d_hid, hidden_dim=d_model, shared_layers=nlayers, t_pred_layers=pred_layers , pred_layers=pred_layers, drop_out=dropout, t_embed_dim=d_hid, yd_embed_dim=d_hid)
         self.decoder = CEVAE_Decoder(latent_dim=d_hid, output_dim=d_model, hidden_dim=d_hid, t_pred_layers=pred_layers, shared_layers=nlayers, drop_out=dropout, t_embed_dim=d_hid)
@@ -641,21 +413,17 @@ class MLP(nn.Module):
         layers = []
 
         if num_layers == 1:
-            # 단일 층인 경우
             layers.append(nn.Linear(input_dim, output_dim))
         else:
-            # 입력층
             layers.append(nn.Linear(input_dim, hidden_dim))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout_rate))
 
-            # 은닉층
             for _ in range(num_layers - 2):
                 layers.append(nn.Linear(hidden_dim, hidden_dim))
                 layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout_rate))
 
-            # 출력층
             layers.append(nn.Linear(hidden_dim, output_dim))
 
         self.layers = nn.Sequential(*layers)
@@ -663,7 +431,7 @@ class MLP(nn.Module):
     def forward(self, x):
         return self.layers(x)
 
-class customTransformerEncoder(TransformerEncoder):
+class CETransformerEncoder(TransformerEncoder):
     def __init__(self, encoder_layer, num_layers, d_model, pred_layers=1, norm=None, enable_nested_tensor=True, mask_check=True, residual_t=False, residual_x = False):
         super().__init__(encoder_layer, num_layers, norm, enable_nested_tensor, mask_check)
         self.x2t1 = MLP(d_model,d_model//2, 1, num_layers=pred_layers) # Linear
@@ -786,9 +554,9 @@ class customTransformerEncoder(TransformerEncoder):
         
         return output, (t1, t2), yd
 
-class CETransformer(nn.Module):
+class CEVT(nn.Module):
     def __init__(self, args):
-        super(CETransformer, self).__init__()
+        super(CEVT, self).__init__()
         d_model=args.num_features
         nhead=args.num_heads
         d_hid=args.hidden_dim
@@ -798,7 +566,6 @@ class CETransformer(nn.Module):
         self.shift = args.shift
         self.unidir = args.unidir
         self.is_variational = args.variational
-        self.is_synthetic = args.is_synthetic
         
         if args.variational:
             print("variational z sampling")
@@ -809,13 +576,11 @@ class CETransformer(nn.Module):
             print("unidirectional attention applied")
         else:
             print("maxpool applied")
-        if not args.is_synthetic:
-            self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
-        else:
-            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
+        
+        self.embedding = CEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
         
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
-        self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
+        self.transformer_encoder = CETransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
 
         # Vairatioanl Z
         self.fc_mu = nn.Linear(d_model, d_model)
@@ -873,15 +638,15 @@ class CETransformer(nn.Module):
         src_mask = self.generate_square_subsequent_mask(x.size(1)).cuda() if self.unidir else None
         
         # Z ------
-        # CETransformer encoder
+        # CEVT encoder
         z, (enc_t1, enc_t2), enc_yd = self.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len)
         if self.unidir:
             idx = val_len - 1
-            z = z[torch.arange(z.size(0)), idx] # padding 이 아닌값에 해당하는 seq중 마지막 값 사용
+            z = z[torch.arange(z.size(0)), idx] 
         else:
             val_mask = torch.arange(z.size(1))[None, :].cuda() < val_len[:, None]
             valid_z = z * val_mask[:, :, None].float().cuda()
-            z = valid_z.max(dim=1)[0] # padding 이 아닌값에 해당하는 seq 들 max pool
+            z = valid_z.max(dim=1)[0] 
         
         # z_mu, z_logvar = self.fc_mu(z), self.fc_logvar(z)
         z_mu, z_logvar = z, self.fc_logvar(z)
@@ -902,38 +667,20 @@ class CETransformer(nn.Module):
         # Linear Decoder
         dec_yd = self.zt2yd(z.squeeze() + t1_emb + t2_emb)
         
-        pos_embeddings = self.embedding.positional_embedding(diff_days.squeeze().long()) if not self.is_synthetic else torch.zeros_like(z.unsqueeze(1))
+        pos_embeddings = self.embedding.positional_embedding(diff_days.squeeze().long()) 
         
-        # 입력 z에 위치 임베딩 추가
         z_expanded = z.unsqueeze(1) + pos_embeddings  # [batch_size, 124, hidden_dim]
         z_expanded = torch.where(index_tensor < val_len[:, None, None], z_expanded, torch.zeros_like(z_expanded))
         
-        # linear_decoder 적용
+        # linear_decoder 
         z_flat = z_expanded.view(-1, z.shape[-1])  # [batch_size * 5, hidden_dim]
         x_recon_flat = self.linear_decoder(z_flat)  # [batch_size * 5, hidden_dim]
 
-        # 최종 x_recon을 원하는 형태로 재구성
         x_recon = x_recon_flat.view(z_expanded.shape)  # [batch_size, 5, hidden_dim]
-        
-        # Reconstruction w/ Transformer Decoder
-        # if self.shift:
-        #     start_tok = start_tok.repeat(x.size(0), 1).unsqueeze(1)
-        #     x_in = torch.cat([start_tok, x], dim=1)
-        #     tgt_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < (val_len + 1).unsqueeze(1)).cuda()
-        # else :
-        #     x_in = x
-        #     tgt_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
-        # x_recon = self.transformer_decoder(tgt = x_in, memory = z, tgt_mask = tgt_mask, memory_mask = None, tgt_key_padding_mask=tgt_key_padding_mask, memory_key_padding_mask=src_mask)
-        # return x, x_recon, (enc_yd, enc_t), (dec_yd, dec_t)
-        
-        # Reconstruction w/ Linear Decoder
         
         x = torch.where(index_tensor < val_len[:, None, None], x, torch.zeros_like(x))
         x_recon = torch.where(index_tensor < val_len[:, None, None], x_recon, torch.zeros_like(x_recon))
 
-        # x = torch.where(torch.arange(x.size(1), device=x.device)[None, :] < val_len[:, None], x, torch.zeros_like(x))
-        # x_recon = torch.where(torch.arange(x_recon.size(1), device=x_recon.device)[None, :] < val_len[:, None], x_recon, torch.zeros_like(x))
-        
         return x, x_recon, (enc_yd, torch.cat([enc_t1, enc_t2], dim=1)), (dec_yd, torch.cat([dec_t1, dec_t2], dim=1)), (z_mu, z_logvar)
 
 
@@ -1114,13 +861,9 @@ class TriangularCausalMask():
 class iTransformer(nn.Module):
     def __init__(self, args, input_size, hidden_size, output_size, num_layers, num_heads, drop_out):
         super(iTransformer, self).__init__()
-        self.is_synthetic = args.is_synthetic
         self.max_len = 124 # hard-coding (seq_len)
         
-        if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
-        else: 
-            self.embedding = TableEmbedding_iTrans(output_size=input_size, disable_pe=True, use_treatment=args.use_treatment)
+        self.embedding = TableEmbedding_iTrans(output_size=input_size, disable_pe=True, use_treatment=args.use_treatment)
         
         # Encoder-only architecture
         self.encoder = Encoder_iTrans(
@@ -1172,11 +915,9 @@ class EpsilonLayer(torch.nn.Module):
         epsilon = nn.Parameter(torch.randn_like(input), requires_grad=True)
         return epsilon
 
-
-
 class DragonNet(nn.Module):
     """
-    l2 regularizer 가 안 들어감. vs tf code
+    W/o l2 regularizer
         """
     def __init__(self, args, 
                 input_size=128, hidden_size=200, output_size=2, num_treatments=7, disable_embedding=False):
@@ -1184,10 +925,7 @@ class DragonNet(nn.Module):
         
         if disable_embedding:
             input_size = 12
-        if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
-        else: 
-            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         # Representation
         self.representation = nn.Sequential(
             nn.Linear(input_size, hidden_size),
@@ -1290,10 +1028,7 @@ class TarNet(nn.Module):
         super(TarNet, self).__init__()
         if disable_embedding:
             input_size = 12
-        if args.is_synthetic:
-            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
-        else: 
-            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         # Representation
         self.representation = nn.Sequential(
             nn.Linear(input_size, hidden_size),

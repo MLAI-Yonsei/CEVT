@@ -174,8 +174,6 @@ parser.add_argument(
     type=str, default='t2', choices=["t1", "t2"],
     help="Intervention variable for Causal Effect Estimation (default : t1)")
 
-parser.add_argument('--is_synthetic', action='store_true', help='use synthetic dataset (default false)')
-
 args = parser.parse_args()
 ## ----------------------------------------------------------------------------------------------------
 
@@ -437,7 +435,6 @@ for epoch in range(1, args.epochs + 1):
 
 # Estimate Population average treatment effects
 negative_acc_y_t2, negative_acc_d_t2, ce_y_t2, ce_d_t2 = utils.iTrans_CE(args, best_model, val_dataloader, 't2')
-pehe_y, ate_error_y = utils.PEHE(args, model, val_dataloader, 't2')
 
 ## Print Best Model ---------------------------------------------------------------------------
 print(f"Best {args.model} achieved [d:{best_test_losses[args.table_idx][0]}, y:{best_test_losses[args.table_idx][1]}] on {best_epochs[args.table_idx]} epoch!!")
@@ -452,16 +449,13 @@ if args.ignore_wandb == False:
         wandb.run.summary[f"best_val_loss (y) {date_key}"] = best_val_loss_y[i]
         wandb.run.summary[f"best_val_loss (t) [norm] {date_key}"] = best_val_loss_t[i]
         wandb.run.summary[f"best_val_loss {date_key}"] = best_val_loss_d[i] + best_val_loss_y[i]
-        wandb.run.summary[f"best_te_mae_loss (d) {date_key}"] = best_test_losses[i][0]
-        wandb.run.summary[f"best_te_mae_loss (y) {date_key}"] = best_test_losses[i][1]
-        wandb.run.summary[f"best_te_mae_loss {date_key}"] = best_test_losses[i][0] + best_test_losses[i][1]
-        wandb.run.summary[f"best_te_rmse_loss (d) {date_key}"] = best_test_losses[i][2]
-        wandb.run.summary[f"best_te_rmse_loss (y) {date_key}"] = best_test_losses[i][3]
-        wandb.run.summary[f"best_te_rmse_loss {date_key}"] = best_test_losses[i][2] + best_test_losses[i][3]
+        wandb.run.summary[f"best_test_mae_loss (d) {date_key}"] = best_test_losses[i][0]
+        wandb.run.summary[f"best_test_mae_loss (y) {date_key}"] = best_test_losses[i][1]
+        wandb.run.summary[f"best_test_mae_loss {date_key}"] = best_test_losses[i][0] + best_test_losses[i][1]
+        wandb.run.summary[f"best_test_rmse_loss (d) {date_key}"] = best_test_losses[i][2]
+        wandb.run.summary[f"best_test_rmse_loss (y) {date_key}"] = best_test_losses[i][3]
+        wandb.run.summary[f"best_test_rmse_loss {date_key}"] = best_test_losses[i][2] + best_test_losses[i][3]
     
-    
-    wandb.run.summary["pehe_y (t2)"] = pehe_y
-    wandb.run.summary["ate_error_y (t2)"] = ate_error_y
     wandb.run.summary["CE_y (t2)"] = ce_y_t2
     wandb.run.summary["CE_d (t2)"] = ce_d_t2
     wandb.run.summary["CACC_y (t2)"] = negative_acc_y_t2

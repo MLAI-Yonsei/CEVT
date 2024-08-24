@@ -460,15 +460,9 @@ def CE(args, model, dataloader, intervene_var):
         
         if args.use_treatment:
             if args.model == 'cevt':
-                # Model의 encoder 부분에서 t와 yd를 예측하고 이 값을 사용하니, Transformer encoder 부분만 불러와서 forward
                 (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                 src_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
                 src_mask = model.generate_square_subsequent_mask(x.size(1)).cuda() if model.unidir else None
-
-                # Input X를 기반으로 하는 encoder의 예측치 t를 original t 로 사용
-                
-                # use original prediction with x2t_pred
-                # _, original_t, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len)
 
                 # use ground truth t instead of x2t_pred
                 original_t = gt_t[:,0].unsqueeze(1) if intervene_var == 't1' else gt_t[:,1].unsqueeze(1)
@@ -488,9 +482,7 @@ def CE(args, model, dataloader, intervene_var):
                     elif intervene_var == 't2':
                         intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
                     
-                    # intervene_t를 배치 크기와 같은 텐서로 생성
                     intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
-                    # 이제 intervene_t를 모델에 전달
                     _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=(intervene_var,intervene_t))
                     
                     delta_y = original_enc_yd - intervene_enc_yd
@@ -527,9 +519,7 @@ def CE(args, model, dataloader, intervene_var):
                         intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
 
                     
-                    # intervene_t를 배치 크기와 같은 텐서로 생성
                     intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).cuda()
-                    # 이제 intervene_t를 모델에 전달
                     _, _, intervene_enc_yd, _ = model.encoder(x, t_gt=intervene_t)
                     
                     delta_y = original_enc_yd - intervene_enc_yd
@@ -580,7 +570,6 @@ def CE(args, model, dataloader, intervene_var):
                     data_points_d.append((delta_t[i].item(), delta_d[i].item()))
     
     def calculate_gradients_and_effect(data_points, method='coef'):
-        # 데이터 변환
         del_t = data_points[:, 0]  # delta_t
         del_var = data_points[:, 1]   # delta_y or delta_d
 
@@ -677,10 +666,10 @@ def reduction_cluster(x, diff_days, len, reduction):
         pad_tensor = torch.zeros([5,x.shape[-1]]).cuda()
         m = len[i].item()
         non_padded_cluster = x[i, :m, :]  
-        ## 클러스터 기준 평균 ##
+        ## Cluster-wise average ##
         if reduction == "mean":
             non_padded_cluster = torch.mean(non_padded_cluster, dim=0)
-        ## 클러스터 내 날짜 기준 평균 ##
+        ## Date-wise average ##
         elif reduction == "date":
             non_padded_days = diff_days[i, :m, :]
             non_padded_cluster, new_len = patient_seq_to_date_seq(non_padded_cluster, non_padded_days)
@@ -939,7 +928,6 @@ def iTrans_CE(args, model, dataloader, intervene_var):
         
         if args.use_treatment:
             if args.model == 'cevt':
-                # Model의 encoder 부분에서 t와 yd를 예측하고 이 값을 사용하니, Transformer encoder 부분만 불러와서 forward
                 (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                 src_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
                 src_mask = model.generate_square_subsequent_mask(x.size(1)).cuda() if model.unidir else None
@@ -963,9 +951,8 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                         intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
 
                     
-                    # intervene_t를 배치 크기와 같은 텐서로 생성
                     intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
-                    # 이제 intervene_t를 모델에 전달
+                    
                     _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=("t1",intervene_t))
                     
                         
@@ -1107,7 +1094,6 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                     data_points_d.append((delta_t[i].item(), delta_d[i].item()))
     
     def iTrans_calculate_gradients_and_effect(data_points, method='coef'):
-        # 데이터 변환
         del_t = data_points[:, 0]  # delta_t
         del_var = data_points[:, 1]   # delta_y or delta_d
 

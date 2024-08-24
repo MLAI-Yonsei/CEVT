@@ -9,7 +9,7 @@ import pickle
 import argparse
 import tabulate
 
-import utils, models, ml_algorithm
+import utils, models
 import wandb
 from torch.utils.data import DataLoader, random_split, ConcatDataset
 
@@ -167,8 +167,6 @@ parser.add_argument(
     type=str, default='t2', choices=["t1", "t2"],
     help="Intervention variable for Causal Effect Estimation (default : t1)")
 
-parser.add_argument('--is_synthetic', action='store_true', help='use synthetic dataset (default false)')
-
 args = parser.parse_args()
 ## ----------------------------------------------------------------------------------------------------
 
@@ -190,44 +188,7 @@ if args.ignore_wandb == False:
         wandb.run.name = f"embed_{args.model}({args.hidden_dim})-{args.optim}-{args.lr_init}-{args.wd}-{args.alpha}"
        
 ## Load Data --------------------------------------------------------------------------------
-"""
-### ./data/data_mod.ipynb 에서 기본적인 데이터 전처리  ###
-# cutdates_num=0 if args.model=='cevt' else 5 # 5 for baseline?
-cutdates_num=0
-tr_datasets = []; val_datasets = []; test_datasets = []; min_list=[]; max_list=[] 
-for i in range(0, cutdates_num+1):
-    data = pd.read_csv(args.data_path+f"data_cut_{i}.csv")
-    dataset = utils.Tabledata(args, data, args.scaling)
-    train_dataset, val_dataset, test_dataset = random_split(dataset, utils.data_split_num(dataset))
-    tr_datasets.append(train_dataset)
-    val_datasets.append(val_dataset)
-    test_datasets.append(test_dataset)
-train_dataset = tr_datasets[0]
-tr_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
-print(f"Number of training Clusters : {len(train_dataset)}")
-val_dataloaders=[]; test_dataloaders=[]
-
-# index 0 -> all dataset / index i -> i-th data cut-off
-for i in range(cutdates_num+1):
-    val_dataset = val_datasets[i]; test_dataset = test_datasets[i]
-    val_dataloader = DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
-    test_dataloader = DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
-    val_dataloaders.append(val_dataloader); test_dataloaders.append(test_dataloader)
-
-print("Successfully load data!")
-"""
-
-if args.is_synthetic:
-    # with open('./data/synthetic/synthetic_ts.pkl', 'rb') as f:
-    #     data = pickle.load(f)
-    # dataset = utils.SyntheticTimeSeriesDataset(args, data)
-    
-    print('using synthetic data')
-    with open('./data/synthetic/synthetic_dowhy.pkl', 'rb') as f:
-        data = pickle.load(f)
-    dataset = utils.SyntheticDataset(args, data)
-else:
-    dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
+dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
 train_dataset, val_dataset, test_dataset = random_split(dataset, utils.data_split_num(dataset))
 tr_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
 print(f"Number of training Clusters : {len(train_dataset)}")
@@ -492,7 +453,6 @@ for epoch in range(1, args.epochs + 1):
 
 # Estimate Population average treatment effects
 negative_acc_y_t2, negative_acc_d_t2, ce_y_t2, ce_d_t2 = utils.iTrans_CE(args, best_model, val_dataloader, 't2')
-pehe_y, ate_error_y = utils.PEHE(args, model, val_dataloader, 't2')
 
 ## Print Best Model ---------------------------------------------------------------------------
 print(f"Best {args.model} achieved [d:{best_test_losses[args.table_idx][0]}, y:{best_test_losses[args.table_idx][1]}] on {best_epochs[args.table_idx]} epoch!!")
@@ -507,26 +467,15 @@ if args.ignore_wandb == False:
         wandb.run.summary[f"best_val_loss (y) {date_key}"] = best_val_loss_y[i]
         wandb.run.summary[f"best_val_loss (t) [norm] {date_key}"] = best_val_loss_t[i]
         wandb.run.summary[f"best_val_loss {date_key}"] = best_val_loss_d[i] + best_val_loss_y[i]
-        wandb.run.summary[f"best_te_mae_loss (d) {date_key}"] = best_test_losses[i][0]
-        wandb.run.summary[f"best_te_mae_loss (y) {date_key}"] = best_test_losses[i][1]
-        wandb.run.summary[f"best_te_mae_loss {date_key}"] = best_test_losses[i][0] + best_test_losses[i][1]
-        wandb.run.summary[f"best_te_rmse_loss (d) {date_key}"] = best_test_losses[i][2]
-        wandb.run.summary[f"best_te_rmse_loss (y) {date_key}"] = best_test_losses[i][3]
-        wandb.run.summary[f"best_te_rmse_loss {date_key}"] = best_test_losses[i][2] + best_test_losses[i][3]
+        wandb.run.summary[f"best_test_mae_loss (d) {date_key}"] = best_test_losses[i][0]
+        wandb.run.summary[f"best_test_mae_loss (y) {date_key}"] = best_test_losses[i][1]
+        wandb.run.summary[f"best_test_mae_loss {date_key}"] = best_test_losses[i][0] + best_test_losses[i][1]
+        wandb.run.summary[f"best_test_rmse_loss (d) {date_key}"] = best_test_losses[i][2]
+        wandb.run.summary[f"best_test_rmse_loss (y) {date_key}"] = best_test_losses[i][3]
+        wandb.run.summary[f"best_test_rmse_loss {date_key}"] = best_test_losses[i][2] + best_test_losses[i][3]
     
-    wandb.run.summary["pehe_y (t2)"] = pehe_y
-    wandb.run.summary["ate_error_y (t2)"] = ate_error_y
-    # wandb.run.summary["CE_y (t1)"] = ce_y_t1
     wandb.run.summary["CE_y (t2)"] = ce_y_t2
-    # wandb.run.summary["CE_d (t1)"] = ce_d_t1
     wandb.run.summary["CE_d (t2)"] = ce_d_t2
-    # wandb.run.summary["CACC_y (t1)"] = negative_acc_y_t1
     wandb.run.summary["CACC_y (t2)"] = negative_acc_y_t2
-    # wandb.run.summary["CACC_d (t1)"] = negative_acc_d_t1
     wandb.run.summary["CACC_d (t2)"] = negative_acc_d_t2
-    # wandb.run.summary["CACC_avg (t1)"] = (negative_acc_y_t1 + negative_acc_d_t1)/2
     wandb.run.summary["CACC_avg (t2)"] = (negative_acc_y_t2 + negative_acc_d_t2)/2
-
-    # wandb.run.summary["tr_dat_num"] = concat_tr_num_data
-    # wandb.run.summary["val_dat_num"] : concat_val_num_data
-    # wandb.run.summary["te_dat_num"] : concat_te_num_data

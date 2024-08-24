@@ -30,7 +30,7 @@ def seed_everything(seed):
     os.environ["PYTHONHASHSEED"] = str(seed)
     
 seed_everything(42)
-# TARNet 모델 정의
+
 class TARNet(nn.Module):
     def __init__(self, input_dim):
         super(TARNet, self).__init__()
@@ -47,7 +47,6 @@ class TARNet(nn.Module):
         h = self.shared(x)
         return self.t0(h), self.t1(h)
 
-# DragonNet 모델 정의
 class DragonNet(nn.Module):
     def __init__(self, input_dim):
         super(DragonNet, self).__init__()
@@ -76,20 +75,15 @@ class Transformer(nn.Module):
         self.seq_len = seq_len
 
     def forward(self, x, t):
-        # 입력 차원을 d_model로 투영
         x = self.input_projection(x)  # [batch_size, seq_len, d_model]
         
-        # x에 t를 더함
         x = x + t.unsqueeze(-1).expand(-1, -1, x.size(-1))  # [batch_size, seq_len, d_model]
         
-        # regression 토큰 추가
         regression_tokens = self.regression_token.expand(x.size(0), -1, -1)
         x = torch.cat([regression_tokens, x], dim=1)  # [batch_size, seq_len+1, d_model]
         
-        # Transformer 인코더에 전체 시퀀스 입력
         x = self.encoder(x)  # [batch_size, seq_len+1, d_model]
         
-        # 첫 번째 토큰(regression 토큰)을 사용하여 출력 생성
         return self.linear_head(x[:, 0, :])
 
 class iTransformer(nn.Module):
@@ -100,19 +94,16 @@ class iTransformer(nn.Module):
         encoder_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=nhead, batch_first=True)
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
         self.output_layer = nn.Linear(d_model, 1)
-        self.q_t = nn.Linear(1, d_model)  # t를 d_model 차원으로 변환
+        self.q_t = nn.Linear(1, d_model)  
 
     def forward(self, x, t):
         x = self.embedding(x)
         x = self.positional_encoding(x)
         
-        # t를 처리하고 x와 결합
-        t_embedded = self.q_t(t.unsqueeze(-1))  # t를 [batch_size, 1, d_model] 형태로 변환
-        x = x + t_embedded
+        t_embedded = self.q_t(t.unsqueeze(-1)) 
         
         x = self.transformer_encoder(x)
         
-        # ITE 계산을 위해 처리된 마지막 토큰 사용
         last_token = x[:, -1, :]
         output = self.output_layer(last_token)
         
@@ -533,7 +524,6 @@ def train_cevt(model, X, t_indirect, t, y, epochs=100, batch_size=100):
             loss.backward()
             optimizer.step()
 
-# ITE 계산 함수 수정
 def compute_ite(model, X):
     if isinstance(model, (TARNet, DragonNet)):
         model.eval()
@@ -564,25 +554,19 @@ def compute_ite_cevt(model, X, t_indirect):
         X_tensor = torch.FloatTensor(X).to(device)
         t_indirect_tensor = torch.FloatTensor(t_indirect).to(device)
         
-        # t=0일 때의 결과
         results_t0 = model(X_tensor, t_indirect_tensor, torch.zeros_like(t_indirect_tensor).cuda())
         y_t0 = results_t0['y_t0']
         
-        # t=1일 때의 결과
         results_t1 = model(X_tensor, t_indirect_tensor, torch.ones_like(t_indirect_tensor).cuda())
         y_t1 = results_t1['y_t1']
         
-        # ITE 계산
         ite = y_t1 - y_t0
         
-    return ite.mean(dim=1).cpu().numpy() # TODO
-    # return ite.cpu().numpy() # TODO
+    return ite.mean(dim=1).cpu().numpy() 
 
-# PEHE 계산 함수
 def compute_pehe(ite_true, ite_pred):
     return np.sqrt(np.mean((ite_true - ite_pred)**2))
 
-# ATE 계산 함수
 def compute_ate(ite_true, ite_pred):
     return np.mean(np.abs(ite_true - ite_pred))        
 
@@ -603,13 +587,10 @@ def prepare_data(df):
     t_ts = df['Td'].values.reshape(-1, seq_len)
     y_ts = df['Y'].values.reshape(-1, seq_len)
     treatment_effect_ts = df['treatment_effect'].values.reshape(-1,seq_len)
-    # import pdb;pdb.set_trace()
     return X, t_indirect, t, y, treatment_effect, X_ts, t_indirect_ts, t_ts, y_ts, treatment_effect_ts
 
 
-# 모델 학습 및 평가 함수
 def train_and_evaluate(X, t_indirect, t, y, treatment_effect, X_ts, t_indirect_ts, t_ts, y_ts, treatment_effect_ts):
-    # 데이터를 train, validation, test로 분할
     X_train, X_temp, t_indirect_train, t_indirect_temp, t_train, t_temp, y_train, y_temp, treatment_effect_train, treatment_effect_temp, X_ts_train, X_ts_temp, t_indirect_ts_train, t_indirect_ts_temp, t_ts_train, t_ts_temp, y_ts_train, y_ts_temp, treatment_effect_ts_train, treatment_effect_ts_temp = train_test_split(
         X, t_indirect, t, y, treatment_effect, X_ts, t_indirect_ts, t_ts, y_ts, treatment_effect_ts, 
         test_size=0.4, random_state=42
