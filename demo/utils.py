@@ -706,7 +706,9 @@ def CE(args, model, dataloader, intervene_var):
                 for i in range(delta_y.size(0)):
                     data_points_y.append((delta_t[i].item(), delta_y[i].item()))
                     data_points_d.append((delta_t[i].item(), delta_d[i].item()))
-    
+    if args.model == 'CEVAE':
+        data_points_y, data_points_d = data_points_d, data_points_y
+
     def calculate_gradients_and_effect(data_points, method='coef'):
         # 데이터 변환
         del_t = data_points[:, 0]  # delta_t

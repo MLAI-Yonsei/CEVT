@@ -565,7 +565,7 @@ def main(main_model):
     # print(f"Best {args.model} achieved [d:{test_mae_d_list[0]} {test_rmse_d_list[0]}")
     # print(f"Training completed.\nThe model saved as '{args.save_path}{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}.pt'!!")
         # ---------------------------------------------------------------------------------------------
-    return (test_mae_d_list[0], test_rmse_d_list[0], negative_acc_d_t2) if args.model != 'cevae' else (test_mae_d_list[0], test_rmse_d_list[0], negative_acc_y_t2)
+    return (test_mae_d_list[0], test_rmse_d_list[0], negative_acc_d_t2)
         
 def print_results(results):
     from prettytable import PrettyTable
