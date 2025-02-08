@@ -1,1 +1,1 @@
-### COVID-19 Data do not open for public yet
+### COVID-19 Data will be available upon request.
