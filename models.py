@@ -9,6 +9,7 @@ from utils import reduction_cluster, reparametrize
 import pdb
 import warnings
 from torch.nn.modules.transformer import _get_seq_len, _detect_is_causal_mask
+from torch.nn import LayerNorm
 
 warnings.filterwarnings("ignore", "Converting mask without torch.bool dtype to bool")
 
@@ -430,6 +431,16 @@ class MLP(nn.Module):
 
     def forward(self, x):
         return self.layers(x)
+import os
+import csv
+def log_value(path, values, header=None):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_header = not os.path.exists(path)
+    with open(path, 'a') as f:
+        writer = csv.writer(f)
+        if write_header and header:
+            writer.writerow(header)
+        writer.writerow(values)
 
 class CETransformerEncoder(TransformerEncoder):
     def __init__(self, encoder_layer, num_layers, d_model, pred_layers=1, norm=None, enable_nested_tensor=True, mask_check=True, residual_t=False, residual_x = False):
@@ -440,6 +451,14 @@ class CETransformerEncoder(TransformerEncoder):
         self.t2_emb = MLP(1,d_model//2, d_model, num_layers=pred_layers) # Linear
         self.xt2yd = MLP(d_model,d_model//2, 2, num_layers=pred_layers) # Linear
         self.yd_emb = MLP(2,d_model//2, d_model, num_layers=pred_layers) # Linear
+        
+        # layer norms for embeddings
+        self.norm_t1 = LayerNorm(d_model)
+        self.norm_t2 = LayerNorm(d_model)
+        self.norm_yd = LayerNorm(d_model)
+        self.final_norm = nn.LayerNorm(d_model)
+
+        
         self.residual_t = residual_t
         self.residual_x = residual_x
 
@@ -490,67 +509,99 @@ class CETransformerEncoder(TransformerEncoder):
         is_causal = _detect_is_causal_mask(mask, is_causal, seq_len)
 
         for idx, mod in enumerate(self.layers):
-            output = mod(output, src_mask=mask, is_causal=is_causal, src_key_padding_mask=src_key_padding_mask_for_layers)
-            if idx == 0:
-                if mask is not None:
-                    output_emb = output[torch.arange(output.size(0)), val_idx] # uni dir last
-                else:
-                    val_mask = torch.arange(output.size(1))[None, :].cuda() < val_len[:, None]
-                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1) / val_mask.sum(1).unsqueeze(-1).float()
-                    # output_emb = torch.mean(output, dim=1) # average
-                t1_pred = self.x2t1(output_emb) 
-                t1_pred = torch.clamp(t1_pred, 0, 1) # min-max normalized
-                t1 = intervene_t[1] if intervene_t != None and intervene_t[0]=='t1' else t1_pred
+            output = mod(
+                output,
+                src_mask=mask,
+                is_causal=is_causal,
+                src_key_padding_mask=src_key_padding_mask
+            )
 
-                t1_emb = self.t1_emb(t1)
-                t1_res = t1_emb.clone()
-                x1_res = output_emb.clone()
-                output = output + t1_emb.unsqueeze(1)
-            elif idx == 1:
-                # output = output + t_emb.unsqueeze(1)
+            # --- Layer 0: predict t1 and inject ---
+            if idx == 0:
+                # output_emb: [B, D]
                 if mask is not None:
-                    output_emb = output[torch.arange(output.size(0)), val_idx] # uni dir last
+                    output_emb = output[torch.arange(output.size(0)), val_idx]
                 else:
-                    val_mask = torch.arange(output.size(1))[None, :].cuda() < val_len[:, None]
-                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1) / val_mask.sum(1).unsqueeze(-1).float()
-                    # output_emb = torch.mean(output, dim=1) # average
-                x2_res = output_emb.clone()
+                    val_mask = (torch.arange(output.size(1), device=output.device)[None, :] 
+                                < val_len[:, None])
+                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1)
+                    output_emb /= val_mask.sum(1).unsqueeze(-1).float()
+
+                # t1_pred: [B,1]
+                t1_pred = self.x2t1(output_emb)
+                # replace clamp with sigmoid for smooth grad:
+                t1_pred = torch.sigmoid(t1_pred)
+                t1 = intervene_t[1] if intervene_t is not None and intervene_t[0]=='t1' else t1_pred
+
+                # embed + norm
+                t1_emb = self.t1_emb(t1)               # [B, D]
+                t1_emb = self.norm_t1(t1_emb)          # <-- LayerNorm
+                t1_res  = t1_emb.clone()
+                x1_res  = output_emb.clone()
+
+                # inject
+                output = output + t1_emb.unsqueeze(1)
+
+            # --- Layer 1: predict t2 and inject ---
+            elif idx == 1:
+                if mask is not None:
+                    output_emb = output[torch.arange(output.size(0)), val_idx]
+                else:
+                    val_mask = (torch.arange(output.size(1), device=output.device)[None, :] 
+                                < val_len[:, None])
+                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1)
+                    output_emb /= val_mask.sum(1).unsqueeze(-1).float()
+
+                # optional residual connections
                 if self.residual_t:
                     output_emb = output_emb + t1_res
                 if self.residual_x:
                     output_emb = output_emb + x1_res
+
                 t2_pred = self.xt12t2(output_emb)
-                t2_pred = torch.clamp(t2_pred, 0, 1)  # min-max normalized
-                t2 = intervene_t[1] if intervene_t != None and intervene_t[0]=='t2' else t2_pred
+                t2_pred = torch.sigmoid(t2_pred)
+                t2 = intervene_t[1] if intervene_t is not None and intervene_t[0]=='t2' else t2_pred
+
                 t2_emb = self.t2_emb(t2)
-                t_res = t1_res + t2_emb.clone() # USE T1+T2 EMB AS RESIDUAL T EMB
+                t2_emb = self.norm_t2(t2_emb)          # <-- LayerNorm
+                t_res  = t1_res + t2_emb.clone()
+                x2_res  = output_emb.clone()
+
                 output = output + t2_emb.unsqueeze(1)
+
+            # --- Layer 2: predict yd and inject ---
             elif idx == 2:
-                # output = output + t_emb.unsqueeze(1)
                 if mask is not None:
-                    output_emb = output[torch.arange(output.size(0)), val_idx] # uni dir last
+                    output_emb = output[torch.arange(output.size(0)), val_idx]
                 else:
-                    val_mask = torch.arange(output.size(1))[None, :].cuda() < val_len[:, None]
-                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1) / val_mask.sum(1).unsqueeze(-1).float()
-                    # output_emb = torch.mean(output, dim=1) # average
-                x3_res = output_emb.clone()
+                    val_mask = (torch.arange(output.size(1), device=output.device)[None, :] 
+                                < val_len[:, None])
+                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1)
+                    output_emb /= val_mask.sum(1).unsqueeze(-1).float()
+
                 if self.residual_t:
                     output_emb = output_emb + t_res
                 if self.residual_x:
                     output_emb = output_emb + x2_res
+
                 yd = self.xt2yd(output_emb)
-                yd = torch.clamp(yd, 0, 1)  # min-max normalized
+                yd = torch.sigmoid(yd)
                 yd_emb = self.yd_emb(yd)
+                yd_emb = self.norm_yd(yd_emb)          # <-- LayerNorm
+                x3_res  = output_emb.clone()
+
                 output = output + yd_emb.unsqueeze(1)
-            elif idx == 3:
-                if self.residual_x:
-                    output = output + x3_res.unsqueeze(1)
+
+            # --- Layer 3: optional residual x ---
+            elif idx == 3 and self.residual_x:
+                output = output + x3_res.unsqueeze(1)
 
         if convert_to_nested:
             output = output.to_padded_tensor(0., src.size())
 
-        if self.norm is not None:
-            output = self.norm(output)
+        # if self.norm is not None:
+        #     output = self.norm(output)
+        output = self.final_norm(output)
         
         return output, (t1, t2), yd
 

@@ -1,0 +1,62 @@
+digraph {
+	age
+	CT_R
+	CT_E
+	dis
+	danger
+	gender
+	is_korean
+	"primary case"
+	job_idx
+	rep_idx
+	place_idx
+	add_idx
+	y
+	d
+	gender -> age [label=-4.76]
+	is_korean -> age [label=3.70]
+	job_idx -> age [label=0.16]
+	place_idx -> age [label=-0.60]
+	d -> age [label=-0.26]
+	CT_E -> CT_R [label=1.00]
+	danger -> dis [label=-0.47]
+	dis -> gender [label=-0.08]
+	danger -> gender [label=-0.05]
+	dis -> is_korean [label=0.11]
+	danger -> is_korean [label=0.05]
+	gender -> is_korean [label=-0.20]
+	dis -> job_idx [label=5.70]
+	danger -> job_idx [label=6.01]
+	is_korean -> job_idx [label=11.89]
+	add_idx -> rep_idx [label=0.80]
+	dis -> place_idx [label=1.63]
+	danger -> place_idx [label=1.37]
+	gender -> place_idx [label=-1.89]
+	is_korean -> place_idx [label=2.58]
+	CT_R -> add_idx [label=-0.44]
+	CT_E -> add_idx [label=0.45]
+	dis -> add_idx [label=-0.75]
+	danger -> add_idx [label=-1.06]
+	is_korean -> add_idx [label=-1.70]
+	"primary case" -> add_idx [label=-1.77]
+	place_idx -> add_idx [label=-0.05]
+	CT_R -> y [label=0.10]
+	dis -> y [label=0.55]
+	danger -> y [label=1.20]
+	is_korean -> y [label=2.14]
+	"primary case" -> y [label=-4.93]
+	job_idx -> y [label=0.04]
+	rep_idx -> y [label=-0.08]
+	place_idx -> y [label=-0.10]
+	CT_R -> d [label=0.08]
+	CT_E -> d [label=-0.10]
+	danger -> d [label=-0.23]
+	is_korean -> d [label=-0.38]
+	"primary case" -> d [label=-0.87]
+	place_idx -> d [label=0.04]
+	add_idx -> d [label=0.02]
+	y -> d [label=0.14]
+	{
+		rank=same
+	}
+}

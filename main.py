@@ -74,7 +74,7 @@ parser.add_argument('--shift', action='store_true', help='do not use treatment a
 
 parser.add_argument(
     "--MC_sample",
-    type=int, default=30,
+    type=int, default=1,
     help="Counts of Monte Carlo resampling"
 )
 
@@ -179,15 +179,15 @@ parser.add_argument("--optim", type=str, default="adam",
 parser.add_argument("--momentum", type=float, default=0.9,
                 help="momentum (Default : 0.9)")
 
-parser.add_argument("--epochs", type=int, default=200, metavar="N",
-    help="number epochs to train (Default : 200)")
+parser.add_argument("--epochs", type=int, default=100, metavar="N",
+    help="number epochs to train (Default : 100)")
 
 parser.add_argument("--wd", type=float, default=5e-4, help="weight decay (Default: 5e-4)")
 
 parser.add_argument("--scheduler", type=str, default='cos_anneal', choices=['constant', "cos_anneal"])
 
-parser.add_argument("--t_max", type=int, default=200,
-                help="T_max for Cosine Annealing Learning Rate Scheduler (Default : 200)")
+parser.add_argument("--t_max", type=int, default=100,
+                help="T_max for Cosine Annealing Learning Rate Scheduler (Default : 100)")
 
 parser.add_argument("--lambdas", nargs='+', type=float, default=[1.0, 1.0, 1.0], help='pred loss + kld loss + recon loss')
 
@@ -215,7 +215,7 @@ print(f"Device : {args.device}")
 
 ## Set wandb ---------------------------------------------------------------------------
 if args.ignore_wandb == False:
-    wandb.init(entity="your_entity", project="your_project", group=args.run_group)
+    wandb.init(entity="mlai_medical_ai", project="cevt", group=args.run_group)
     wandb.config.update(args)
     if args.disable_embedding:
         wandb.run.name = f"raw_{args.model}({args.hidden_dim})-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}"
@@ -505,6 +505,7 @@ for epoch in range(1, args.epochs + 1):
         "train_pred_loss": tr_pred_loss,
         "train_kld_loss" : tr_kl_loss,
         "train_reconstruction_loss": tr_recon_loss, 
+        "train_total_loss": args.lambdas[0]*tr_loss_d + args.lambdas[0]*tr_loss_y+args.lambdas[1]*tr_kl_loss+args.lambdas[2]*tr_recon_loss,
         "concat/valid_d": val_loss_d_list[0],
         "concat/valid_y": val_loss_y_list[0],
         "concat/valid_t1 ": val_loss_t1_list[0],
@@ -518,7 +519,8 @@ for epoch in range(1, args.epochs + 1):
         "concat/test_d (rmse)": test_rmse_d_list[0],
         "concat/test_y (rmse)": test_rmse_y_list[0],
         "setting/lr": lr,
-        "setting/kld_lambda": args.lambdas[1]
+        "setting/kld_lambda": args.lambdas[1],
+        "setting/recon_lambda": args.lambdas[2],
     }
 
         for i in range(1, cutdates_num+1):

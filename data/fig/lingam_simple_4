@@ -1,0 +1,15 @@
+digraph {
+	dis
+	danger
+	y
+	d
+	danger -> dis [label=-0.65]
+	dis -> y [label=0.97]
+	danger -> y [label=1.60]
+	dis -> d [label=-0.29]
+	danger -> d [label=-0.42]
+	y -> d [label=0.12]
+	{
+		rank=same
+	}
+}
