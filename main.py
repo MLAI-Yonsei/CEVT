@@ -11,8 +11,8 @@ import argparse
 import tabulate
 
 import utils, models
-import wandb
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader, random_split, ConcatDataset, Subset, TensorDataset
+from collections import defaultdict
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -24,9 +24,6 @@ parser.add_argument("--seed", type=int, default=1000, help="random seed (default
 parser.add_argument("--eval_model", type=str, default=None,
     help="path to load saved model to evaluate model (default: None)",)
 
-parser.add_argument("--ignore_wandb", action='store_true',
-        help = "Stop using wandb (Default : False)")
-
 parser.add_argument("--run_group", type=str, default="default")
 
 parser.add_argument("--save_pred", action='store_true',
@@ -36,7 +33,10 @@ parser.add_argument(
     type=int, default=0, choices=[0, 1, 2, 3, 4, 5],
     help="Cluster Date print date (Default : 0) if 0, use concated dataset"
 )
- 
+
+parser.add_argument("--filter_out_clip", action='store_true',
+        help = "Filter out clamped data points when calculate causal effect (Default : False)")
+
 # Data ---------------------------------------------------------
 parser.add_argument(
     "--data_path",
@@ -74,7 +74,7 @@ parser.add_argument('--shift', action='store_true', help='do not use treatment a
 
 parser.add_argument(
     "--MC_sample",
-    type=int, default=1,
+    type=int, default=30,
     help="Counts of Monte Carlo resampling"
 )
 
@@ -89,11 +89,11 @@ parser.add_argument("--cutoff_dataset",
 parser.add_argument(
     "--model",
     type=str, default='cevt',
-    choices=["cevt", "cevae", "transformer", "linear", "ridge", "mlp", 'tarnet', 'dragonnet', 'iTransformer'],
-    help="model name (default : cet)")
+    choices=["cevt", "cevae", "transformer", "linear", "ridge", "mlp", "svr", "rfr", 'tarnet', 'dragonnet', 'iTransformer'],
+    help="model name (default : cevt)")
 
 parser.add_argument("--save_path",
-            type=str, default="./best_model/",
+            type=str, default="./best_models/",
             help="Path to save best model dict")
 
 parser.add_argument(
@@ -115,7 +115,7 @@ parser.add_argument(
 )
 
 parser.add_argument(
-    "--cet_transformer_layers",
+    "--cevt_transformer_layers",
     type=int, default=4,
     help="It has to be over 3 layers (default : 4)"
 )
@@ -179,15 +179,15 @@ parser.add_argument("--optim", type=str, default="adam",
 parser.add_argument("--momentum", type=float, default=0.9,
                 help="momentum (Default : 0.9)")
 
-parser.add_argument("--epochs", type=int, default=100, metavar="N",
-    help="number epochs to train (Default : 100)")
+parser.add_argument("--epochs", type=int, default=200, metavar="N",
+    help="number epochs to train (Default : 200)")
 
 parser.add_argument("--wd", type=float, default=5e-4, help="weight decay (Default: 5e-4)")
 
 parser.add_argument("--scheduler", type=str, default='cos_anneal', choices=['constant', "cos_anneal"])
 
-parser.add_argument("--t_max", type=int, default=100,
-                help="T_max for Cosine Annealing Learning Rate Scheduler (Default : 100)")
+parser.add_argument("--t_max", type=int, default=200,
+                help="T_max for Cosine Annealing Learning Rate Scheduler (Default : 200)")
 
 parser.add_argument("--lambdas", nargs='+', type=float, default=[1.0, 1.0, 1.0], help='pred loss + kld loss + recon loss')
 
@@ -202,28 +202,38 @@ parser.add_argument(
     type=str, default='t1', choices=["t1", "t2"],
     help="Intervention variable for Causal Effect Estimation (default : t1)")
 
+parser.add_argument('--is_synthetic', action='store_true', help='use synthetic dataset (default false)')
+
+parser.add_argument('--is_municipal', action='store_true', help='use municipal dataset (default false)')
+
+parser.add_argument('--municipal_max_cluster', type=int, default=98, choices=[98,19])
+
+parser.add_argument('--lagging_num', type=int, default=1)
+
 args = parser.parse_args()
 ## ----------------------------------------------------------------------------------------------------
 
 
 ## Set seed and device ----------------------------------------------------------------
 utils.set_seed(args.seed)
-
 args.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"Device : {args.device}")
 #-------------------------------------------------------------------------------------
 
-## Set wandb ---------------------------------------------------------------------------
-if args.ignore_wandb == False:
-    wandb.init(entity="mlai_medical_ai", project="cevt", group=args.run_group)
-    wandb.config.update(args)
-    if args.disable_embedding:
-        wandb.run.name = f"raw_{args.model}({args.hidden_dim})-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}"
-    else:
-        wandb.run.name = f"embed_{args.model}({args.hidden_dim})-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}"
-       
 ## Load Data --------------------------------------------------------------------------------
-dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
+### ./data/data_mod.ipynb preprocessed data  ###
+if args.is_synthetic:
+    
+    print('using synthetic data')
+    with open('./data/synthetic/synthetic_dowhy.pkl', 'rb') as f:
+        data = pickle.load(f)
+    dataset = utils.SyntheticDataset(args, data)
+else:
+    if args.is_municipal:
+        print(f"using municipal data with max cluster size {args.municipal_max_cluster}")
+        dataset = utils.MunicipalTabledata(args, pd.read_csv(args.data_path+f"municipal/preprocessed_municipal_98.csv"), args.scaling)
+    else:
+        dataset = utils.Tabledata(args, pd.read_csv(args.data_path+f"data_cut_{args.cutoff_dataset}.csv"), args.scaling)
 
 train_dataset, val_dataset, test_dataset = random_split(dataset, utils.data_split_num(dataset))
 tr_dataloader = DataLoader(train_dataset, batch_size=args.batch_size, shuffle=True)
@@ -236,14 +246,15 @@ print(f"use treatment as feature : {not args.use_treatment}")
 print("Successfully load data!")
 #-------------------------------------------------------------------------------------
 
+
 ## Model ------------------------------------------------------------------------------------
 if args.model == 'transformer':
     model = models.Transformer(args).to(args.device)
     
 if args.model == 'cevt':
     assert(args.use_treatment == True)
-    model = models.CEVT(args).to(args.device) 
-    
+    model = models.CEVTransformer(args).to(args.device) 
+
 if args.model == 'cevae':
     assert(args.use_treatment == True)
     assert(args.single_treatment == True)
@@ -256,13 +267,27 @@ if args.model in ["linear", "ridge"]:
     model = models.LinearRegression(args=args).to(args.device)
 
 if args.model == 'tarnet':
-    raise('use run_causal.py')
+    model = models.TarNet(args = args,
+                        input_size = args.num_features,
+                        hidden_size = args.hidden_dim,
+                        output_size = args.output_size,
+                        disable_embedding = args.disable_embedding).to(args.device)
     
 if args.model == 'dragonnet':
-    raise('use run_causal.py')
+    model = models.DragonNet(args=args,
+                        input_size = args.num_features,
+                        hidden_size = args.hidden_dim,
+                        output_size = args.output_size,
+                        disable_embedding = args.disable_embedding).to(args.device)
 
 if args.model == 'iTransformer':
-    raise('use run_itransformer.py')
+    model = models.iTransformer(args=args,
+                               input_size=args.num_features, 
+                               hidden_size=args.hidden_dim, 
+                               output_size=args.output_size, 
+                               num_layers=args.num_layers, 
+                               num_heads=args.num_heads, 
+                               drop_out=args.drop_out,).to(args.device)
 
 print(f"Successfully prepared {args.model} model")
 # ---------------------------------------------------------------------------------------------
@@ -285,7 +310,33 @@ elif args.eval_criterion == "RMSE":
 
 ## Optimizer and Scheduler --------------------------------------------------------------------
 if args.optim == "adam":
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr_init, weight_decay=args.wd)
+    if args.lagging_num > 1:
+        assert(args.model == 'cevt')
+        encoder_params = []
+        encoder_params += list(model.embedding.parameters())
+        encoder_params += list(model.transformer_encoder.parameters())
+        encoder_params += list(model.fc_logvar.parameters())  # z_logvar 
+
+        decoder_params = []
+        decoder_params += list(model.z2t.parameters())
+        decoder_params += list(model.t1_emb.parameters())
+        decoder_params += list(model.zt12t2.parameters())
+        decoder_params += list(model.t2_emb.parameters())
+        decoder_params += list(model.zt2yd.parameters())
+        decoder_params += list(model.linear_decoder.parameters())
+
+        optimizer_enc = torch.optim.Adam(
+            encoder_params,
+            lr=args.lr_init,
+            weight_decay=args.wd
+        )
+        optimizer_dec = torch.optim.Adam(
+            decoder_params,
+            lr=args.lr_init,
+            weight_decay=args.wd
+        )
+    else:
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.lr_init, weight_decay=args.wd)
 elif args.optim == "radam":
     optimizer = torch.optim.RAdam(model.parameters(), lr=args.lr_init, weight_decay=args.wd)
 elif args.optim == "adamw":
@@ -295,8 +346,13 @@ elif args.optim == "sgd":
 else:
     raise NotImplementedError
 
-if args.scheduler  == "cos_anneal":
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.t_max)    
+if args.scheduler == "cos_anneal":
+    if args.lagging_num > 1:
+        scheduler_enc = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_enc, T_max=args.t_max)
+        scheduler_dec = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_dec, T_max=args.t_max)
+    else:
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.t_max)
+ 
 else:
     scheduler = None
 # ---------------------------------------------------------------------------------------------
@@ -317,7 +373,10 @@ if args.eval_model != None:
 
 lambda0 = args.lambdas[1]
 for epoch in range(1, args.epochs + 1):
-    lr = optimizer.param_groups[0]['lr']
+    if args.lagging_num > 1:
+        lr = optimizer_enc.param_groups[0]['lr']
+    else:    
+        lr = optimizer.param_groups[0]['lr']
     tr_epoch_eval_loss_d=0; tr_epoch_eval_loss_y=0; tr_epoch_eval_loss_t1=0; tr_epoch_eval_loss_t2=0; tr_epoch_loss_d = 0; tr_epoch_loss_y = 0; val_epoch_loss_d = 0; val_epoch_loss_y = 0; val_epoch_loss_t1 = 0; val_epoch_loss_t2 = 0; te_mae_epoch_loss_d = 0; te_mae_epoch_loss_y = 0; te_mae_epoch_loss_t1 = 0; te_mae_epoch_loss_t2 = 0; te_mse_epoch_loss_d = 0; te_mse_epoch_loss_y = 0; te_mse_epoch_loss_t1 = 0; te_mse_epoch_loss_t2 = 0
     tr_epoch_pred_loss=0; tr_epoch_kl_loss=0; tr_epoch_recon_loss=0
     
@@ -333,7 +392,12 @@ for epoch in range(1, args.epochs + 1):
     if args.eval_model == None:
         for itr, data in enumerate(tr_dataloader):
             ## Training phase
-            tr_batch_loss_d, tr_batch_loss_y, tr_num_data, tr_predicted, tr_ground_truth, tr_eval_loss_y, tr_eval_loss_d, tr_eval_model, *indv_loss = utils.train(args, data, model, optimizer, criterion, epoch, lamb=args.lamb, eval_criterion=eval_criterion,
+            if args.lagging_num > 1:
+                tr_batch_loss_d, tr_batch_loss_y, tr_num_data, tr_predicted, tr_ground_truth, tr_eval_loss_y, tr_eval_loss_d, tr_eval_model, *indv_loss = utils.train_with_lagging(args, data, model, criterion=criterion, epoch=epoch, lamb=args.lamb, eval_criterion=eval_criterion,
+                                                                                                                                        a_y=train_dataset.dataset.a_y, a_d=train_dataset.dataset.a_d, b_y=train_dataset.dataset.b_y, b_d=train_dataset.dataset.b_d,
+                                                                                                                                        use_treatment=args.use_treatment, lambdas=args.lambdas, optimizer_enc=optimizer_enc, optimizer_dec=optimizer_dec, lagging_num=args.lagging_num)
+            else:
+                tr_batch_loss_d, tr_batch_loss_y, tr_num_data, tr_predicted, tr_ground_truth, tr_eval_loss_y, tr_eval_loss_d, tr_eval_model, *indv_loss = utils.train(args, data, model, optimizer, criterion, epoch, lamb=args.lamb, eval_criterion=eval_criterion,
                                                                                                                                         a_y=train_dataset.dataset.a_y, a_d=train_dataset.dataset.a_d, b_y=train_dataset.dataset.b_y, b_d=train_dataset.dataset.b_d,
                                                                                                                                         use_treatment=args.use_treatment, lambdas=args.lambdas)
             tr_epoch_loss_d += tr_batch_loss_d
@@ -401,6 +465,7 @@ for epoch in range(1, args.epochs + 1):
     # save list for all cut-off dates
     val_loss_d_list.append(val_loss_d)
     val_loss_y_list.append(val_loss_y)
+    # val_loss_t_list.append(val_loss_t)
     val_loss_t1_list.append(val_loss_t1)
     val_loss_t2_list.append(val_loss_t2)
     
@@ -459,12 +524,7 @@ for epoch in range(1, args.epochs + 1):
         best_model_weights = {key: value.clone() for key, value in model.state_dict().items()}
         # save state_dict
         os.makedirs(args.save_path, exist_ok=True)
-        utils.save_checkpoint(file_path = f"{args.save_path}/best_{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}-{args.seed}-date{i}_best_val.pt",
-                            epoch = epoch,
-                            state_dict = model.state_dict(),
-                            optimizer = optimizer.state_dict(),
-                            )
-        
+
         if args.save_pred:
             # save prediction and ground truth as csv
             val_df = pd.DataFrame({'val_pred_y':val_pred_y_list,
@@ -490,92 +550,16 @@ for epoch in range(1, args.epochs + 1):
         table = table.split("\n")[2]
     print(table)
     
-    # step scheduler
-    if args.scheduler == 'cos_anneal':
-        scheduler.step()
-    
-    # update wandb
-    if not args.ignore_wandb:
-        wandb_log = {
-        "train/d": tr_loss_d,
-        "train/y": tr_loss_y,
-        "train_eval/d": tr_eval_loss_d,
-        "train_eval/y": tr_eval_loss_y,
-        "train_eval/t ": tr_eval_loss_t,
-        "train_pred_loss": tr_pred_loss,
-        "train_kld_loss" : tr_kl_loss,
-        "train_reconstruction_loss": tr_recon_loss, 
-        "train_total_loss": args.lambdas[0]*tr_loss_d + args.lambdas[0]*tr_loss_y+args.lambdas[1]*tr_kl_loss+args.lambdas[2]*tr_recon_loss,
-        "concat/valid_d": val_loss_d_list[0],
-        "concat/valid_y": val_loss_y_list[0],
-        "concat/valid_t1 ": val_loss_t1_list[0],
-        "concat/valid_t2 ": val_loss_t2_list[0],
-        "concat/test_total (mae)": test_mae_d_list[0] + test_mae_y_list[0],
-        "concat/test_d (mae)": test_mae_d_list[0],
-        "concat/test_y (mae)": test_mae_y_list[0],
-        "concat/test_t1 (mae)": test_mae_t1_list[0],
-        "concat/test_t2 (mae)": test_mae_t2_list[0],
-        "concat/test_total (rmse)": test_rmse_d_list[0] + test_rmse_y_list[0],
-        "concat/test_d (rmse)": test_rmse_d_list[0],
-        "concat/test_y (rmse)": test_rmse_y_list[0],
-        "setting/lr": lr,
-        "setting/kld_lambda": args.lambdas[1],
-        "setting/recon_lambda": args.lambdas[2],
-    }
-
-        for i in range(1, cutdates_num+1):
-            wandb_log.update({
-                f"valid_d": val_loss_d_list[i],
-                f"valid_y": val_loss_y_list[i],
-                f"valid_t1 ": val_loss_t1_list[i],
-                f"valid_t2 ": val_loss_t2_list[i],
-                f"test_total (mae)": test_mae_d_list[i] + test_mae_y_list[i],
-                f"test_d (mae)": test_mae_d_list[i],
-                f"test_y (mae)": test_mae_y_list[i],
-                f"test_t1 (mae)": test_mae_t1_list[i],
-                f"test_t2 (mae)": test_mae_t2_list[i],
-                f"test_total (rmse)": test_rmse_d_list[i] + test_rmse_y_list[i],
-                f"test_d (rmse)": test_rmse_d_list[i],
-                f"test_y (rmse)": test_rmse_y_list[i],
-            })
-
-        wandb.log(wandb_log)
+    if args.scheduler == "cos_anneal":
+        if args.lagging_num > 1:
+            scheduler_enc.step()
+            scheduler_dec.step()
+        else:
+            scheduler.step()
 # ---------------------------------------------------------------------------------------------
 
 model.load_state_dict(best_model_weights)
 # Estimate Population average treatment effects
 negative_acc_y_t1, negative_acc_d_t1, ce_y_t1, ce_d_t1 = utils.CE(args, model, val_dataloader, 't1')
 negative_acc_y_t2, negative_acc_d_t2, ce_y_t2, ce_d_t2 = utils.CE(args, model, val_dataloader, 't2')
-
-## Print Best Model ---------------------------------------------------------------------------
-print(f"Best {args.model} achieved [d:{best_test_losses[args.table_idx][0]}, y:{best_test_losses[args.table_idx][1]}] on {best_epochs[args.table_idx]} epoch!!")
-print(f"The model saved as '{args.save_path}{args.model}-{args.optim}-{args.lr_init}-{args.wd}-{args.drop_out}_best_val.pt'!!")
-if args.ignore_wandb == False:
-    for i in range(cutdates_num+1):
-        date_key = ""
-        wandb.run.summary[f"best_epoch {date_key}"] = best_epochs[i]
-        wandb.run.summary[f"best_tr_models {date_key}"] = best_tr_models[i]
-        wandb.run.summary[f"best_val_models {date_key}"] = best_val_models[i]
-        wandb.run.summary[f"best_val_loss (d) {date_key}"] = best_val_loss_d[i]
-        wandb.run.summary[f"best_val_loss (y) {date_key}"] = best_val_loss_y[i]
-        wandb.run.summary[f"best_val_loss (t1) {date_key}"] = best_val_loss_t1[i]
-        wandb.run.summary[f"best_val_loss (t2) {date_key}"] = best_val_loss_t2[i]
-        wandb.run.summary[f"best_val_loss {date_key}"] = best_val_loss_d[i] + best_val_loss_y[i]
-        wandb.run.summary[f"best_test_mae_loss (d)"] = best_test_losses[i][0]
-        wandb.run.summary[f"best_test_mae_loss (y)"] = best_test_losses[i][1]
-        wandb.run.summary[f"best_test_mae_loss"] = best_test_losses[i][0] + best_test_losses[i][1]
-        wandb.run.summary[f"best_test_rmse_loss (d)"] = best_test_losses[i][2]
-        wandb.run.summary[f"best_test_rmse_loss (y)"] = best_test_losses[i][3]
-        wandb.run.summary[f"best_test_rmse_loss"] = best_test_losses[i][2] + best_test_losses[i][3]
-    
-    wandb.run.summary["CE_y (t1)"] = ce_y_t1
-    wandb.run.summary["CE_y (t2)"] = ce_y_t2
-    wandb.run.summary["CE_d (t1)"] = ce_d_t1
-    wandb.run.summary["CE_d (t2)"] = ce_d_t2
-    wandb.run.summary["CACC_y (t1)"] = negative_acc_y_t1
-    wandb.run.summary["CACC_y (t2)"] = negative_acc_y_t2
-    wandb.run.summary["CACC_d (t1)"] = negative_acc_d_t1
-    wandb.run.summary["CACC_d (t2)"] = negative_acc_d_t2
-    wandb.run.summary["CACC_avg (t1)"] = (negative_acc_y_t1 + negative_acc_d_t1)/2
-    wandb.run.summary["CACC_avg (t2)"] = (negative_acc_y_t2 + negative_acc_d_t2)/2
-# ---------------------------------------------------------------------------------------------
+# pehe_y, ate_error_y = utils.PEHE(args, model, val_dataloader, 't2')

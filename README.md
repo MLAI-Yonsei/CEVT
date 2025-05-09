@@ -24,7 +24,7 @@ To mitigate the lack of medical data benchmarks, we utilized three approaches:
 │   ├── data_mod.ipynb
 │   ├── data_task.csv
 │   └── municipal # <municipal>
-│       └── preprocessed_incheon_98.csv
+│       └── preprocessed_municipal_98.csv
 ├── sh
 │   ├── provincial.sh
 │   └── municipal.sh
@@ -35,7 +35,6 @@ To mitigate the lack of medical data benchmarks, we utilized three approaches:
 ├── utils.py
 └── README.md
 ```
->>>>>>> Stashed changes
 
 2) To solve data scarcity, we proposed and utilized a cut-off data augmentation algorithm.
 ![image](https://github.com/user-attachments/assets/5fccd5c4-2192-4dca-9aa9-f0031b61430f)

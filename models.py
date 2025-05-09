@@ -9,8 +9,17 @@ from utils import reduction_cluster, reparametrize
 import pdb
 import warnings
 from torch.nn.modules.transformer import _get_seq_len, _detect_is_causal_mask
-from torch.nn import LayerNorm
-
+import os
+import csv
+# -------------------------------------------------
+def _log(path, header, row):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    write_header = not os.path.exists(path)
+    with open(path, "a") as f:
+        w = csv.writer(f)
+        if write_header: w.writerow(header)
+        w.writerow(row)
+# -------------------------------------------------
 warnings.filterwarnings("ignore", "Converting mask without torch.bool dtype to bool")
 
 class MLPRegressor(nn.Module):
@@ -23,15 +32,20 @@ class MLPRegressor(nn.Module):
         
         if disable_embedding:
             input_size = 12
-        self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
+        elif args.is_municipal: 
+            self.embedding = municipalCEVAEEmbedding(args, output_size=args.num_features, disable_embedding = disable_embedding, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        else: 
+            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.layers = nn.ModuleList([nn.Linear(input_size, hidden_size, bias=True)])
         for _ in range(args.num_layers - 2):
             self.layers.append(nn.Linear(hidden_size, hidden_size, bias=True))
         self.layers.append(nn.Linear(hidden_size, args.output_size, bias=True))
         self.dropout = nn.Dropout(args.drop_out)
         
-    def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days):
-        x = self.embedding(cont_p, cont_c, cat_p, cat_c, len, diff_days)
+    def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days, is_ce=False):
+        x = self.embedding(cont_p, cont_c, cat_p, cat_c, len, diff_days, is_ce)
         for i, layer in enumerate(self.layers):
             if i == self.num_layers - 1:
                 x = layer(x)  
@@ -46,28 +60,38 @@ class LinearRegression(torch.nn.Module):
 
         if args.disable_embedding:
             input_size = 12
-        self.embedding = TableEmbedding(input_size, disable_embedding = args.disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
+        elif args.is_municipal: 
+            self.embedding = municipalCEVAEEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        else: 
+            self.embedding = TableEmbedding(input_size, disable_embedding = args.disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         self.linear1 = torch.nn.Linear(input_size, args.output_size)
 
-    def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days):
-        x = self.embedding(cont_p, cont_c, cat_p, cat_c, len, diff_days)
+    def forward(self, cont_p, cont_c, cat_p, cat_c, len, diff_days, is_ce=False):
+        x = self.embedding(cont_p, cont_c, cat_p, cat_c, len, diff_days, is_ce)
         x = self.linear1(x)
         return x
 
 class Transformer(nn.Module):
     '''
-        input_size: Table embedding size
-        hidden_size: transformer encoder size
-        output_size : Y, D (2)
-        num_layers : Number of transformer encoder layers
-        num_heads : Number of multi-head attention heads
-        drop_out : Dropout degree
-        disable_embedding: Whether to embed continuous data or not
+        input_size : TableEmbedding 
+        hidden_size : Transformer Encoder 
+        output_size : y, d (2)
+        num_layers : Transformer Encoder Layer 
+        num_heads : Multi Head Attention Head 
+        drop_out : DropOut 
+        disable_embedding : continuous embedding 
     '''
     def __init__(self, args):
         super(Transformer, self).__init__()
         
-        self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
+        elif args.is_municipal: 
+            self.embedding = municipalCEVAEEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+        else:        
+            self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
         self.cls_token = nn.Parameter(torch.randn(1, 1, args.num_features))
         self.transformer_layer = nn.TransformerEncoderLayer(
             d_model=args.num_features,
@@ -81,7 +105,7 @@ class Transformer(nn.Module):
         self.fc = nn.Linear(args.num_features, args.output_size)  
 
         self.init_weights()
-
+        self.args=args
     def init_weights(self) -> None:
         initrange = 0.1
         for module in self.embedding.modules():
@@ -94,12 +118,12 @@ class Transformer(nn.Module):
         self.fc.bias.data.zero_()
         self.fc.weight.data.uniform_(-initrange, initrange)
 
-    def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days):
+    def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_ce=False):
         if self.embedding.reduction != "none":
-            embedded, cls_token_pe = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            embedded, cls_token_pe = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_ce)
         else:
-            (embedded, diff_days, _), cls_token_pe = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days) # embedded:(32, 124, 128)
-        
+            (embedded, diff_days, _), cls_token_pe = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_ce) # embedded:(32, 124, 128)
+
         cls_token = self.cls_token.expand(embedded.size(0), -1, -1) + cls_token_pe.unsqueeze(0).expand(embedded.size(0), -1, -1)
         input_with_cls = torch.cat([cls_token, embedded], dim=1)
         mask = ~(torch.arange(input_with_cls.size(1)).expand(input_with_cls.size(0), -1).cuda() < (val_len+1).unsqueeze(1)).cuda() # val_len + 1 ?
@@ -126,11 +150,11 @@ class SinusoidalPositionalEncoding(nn.Module):
     
 class TableEmbedding(torch.nn.Module):
     '''
-        output_size: Size of embedding output
-        disable_embedding: whether to embed continuous data or not
-        disable_pe: Whether to add positional encoding based on sequence of transformer
-        reduction : “mean” : Reduction to the average by cluster
-                    “date” : Reduce to the average of dates in the cluster
+        output_size : embedding output
+        disable_embedding : continuous embedding on/off
+        disable_pe : Whether or not to add positional encoding by sequence in transformer
+        reduction : "mean" : Reduce to per-cluster average
+                    "date" : Reduce to average of DATE in cluster
     '''
     def __init__(self, output_size=128, disable_embedding=False, disable_pe=True, reduction="mean", use_treatment=False):
         super().__init__()
@@ -183,7 +207,6 @@ class TableEmbedding(torch.nn.Module):
             
         if not self.disable_pe:
             x = x + self.positional_embedding(diff_days.int().squeeze(2))
-            # import pdb;pdb.set_trace()
         if self.reduction == "none":   
             return (x, diff_days, val_len), self.positional_embedding(torch.tensor([5]).cuda())
         elif not self.disable_pe:
@@ -191,13 +214,112 @@ class TableEmbedding(torch.nn.Module):
         else:
             return reduction_cluster(x, diff_days, val_len, self.reduction)
 
-class CEEmbedding(torch.nn.Module):
+class municipalCEVAEEmbedding(torch.nn.Module):
     '''
-        output_size: Size of embedding output
-        disable_embedding: whether to embed continuous data or not
-        disable_pe: Whether to add positional encoding based on sequence of transformer
-        reduction : “mean” : Reduction to the average by cluster
-                    “date” : Reduce to the average of dates in the cluster
+        output_size : embedding output
+        disable_embedding : continuous embedding on/off
+        disable_pe : Whether or not to add positional encoding by sequence in transformer
+        reduction : "mean" : Reduce to per-cluster average
+                    "date" : Reduce to average of DATE in cluster
+    '''
+    def __init__(self, args, output_size=128, disable_embedding=False, disable_pe=True, reduction="date", shift=False, use_treatment=False):
+        super().__init__()
+        self.shift = shift
+        self.reduction = reduction
+        self.disable_embedding = disable_embedding
+        self.disable_pe = disable_pe
+        self.args = args
+        activation = nn.ELU()
+
+        # Embedding dimensions
+        emb_hidden_dim = output_size // 2
+        emb_dim = output_size // 2
+
+        # Continuous variable embedding
+        if not disable_embedding:
+            print("Embedding applied to data")
+            # if not args.use_treatment:
+            #     self.cont_c_NN = nn.Sequential(
+            #         nn.Linear(2, emb_hidden_dim),
+            #         activation,
+            #         nn.Linear(emb_hidden_dim, emb_dim)
+            #     )
+            # elif args.single_treatment:
+            #     self.cont_c_NN = nn.Sequential(
+            #         nn.Linear(1, emb_hidden_dim),
+            #         activation,
+            #         nn.Linear(emb_hidden_dim, emb_dim)
+            #     )
+            # else:
+            #     self.cont_c_NN = None
+            self.cont_c_NN = nn.Sequential(
+                    nn.Linear(2, emb_hidden_dim),
+                    activation,
+                    nn.Linear(emb_hidden_dim, emb_dim)
+                )
+
+            self.cont_p_NN = nn.Sequential(
+                nn.Linear(3, emb_hidden_dim),
+                activation,
+                nn.Linear(emb_hidden_dim, emb_dim)
+            )
+
+        # Categorical variable embedding
+        self.lookup_gender = nn.Embedding(2, emb_dim)
+        self.lookup_birthyear_1930_1959 = nn.Embedding(2, emb_dim)
+        self.lookup_birthyear_1960_1989 = nn.Embedding(2, emb_dim)
+        self.lookup_birthyear_1990s_plus = nn.Embedding(2, emb_dim)
+        self.lookup_birthyear_before_1930 = nn.Embedding(2, emb_dim)
+
+        # Positional embedding
+        if not disable_pe:
+            self.positional_embedding = nn.Embedding(6, output_size)
+            
+    def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_ce=False):
+        if not self.disable_embedding:
+            cont_p_emb = self.cont_p_NN(cont_p)
+            cont_c_emb = self.cont_c_NN(cont_c) if self.cont_c_NN is not None else None
+        # Categorical embedding
+        gender_emb = self.lookup_gender(cat_p[:, :, 0].to(torch.int))
+        birthyear_1930_1959_emb = self.lookup_birthyear_1930_1959(cat_p[:, :, 1].to(torch.int))
+        birthyear_1960_1989_emb = self.lookup_birthyear_1960_1989(cat_p[:, :, 2].to(torch.int))
+        birthyear_1990s_plus_emb = self.lookup_birthyear_1990s_plus(cat_p[:, :, 3].to(torch.int))
+        birthyear_before_1930_emb = self.lookup_birthyear_before_1930(cat_p[:, :, 4].to(torch.int))
+
+        cat_p_emb = torch.mean(torch.stack([
+            gender_emb, 
+            birthyear_1930_1959_emb, 
+            birthyear_1960_1989_emb, 
+            birthyear_1990s_plus_emb, 
+            birthyear_before_1930_emb
+        ]), dim=0)
+        # Concatenate all embeddings
+        if cont_c_emb is not None:
+            cont_emb = torch.mean(torch.stack([cont_p_emb, cont_c_emb], dim=-1), dim=-1)
+        else:
+            cont_emb = cont_p_emb
+
+        tensors_to_concat = [tensor for tensor in [cat_p_emb, cont_emb] if tensor is not None]
+        x = torch.cat(tensors_to_concat, dim=2)
+        # Positional encoding
+        if not self.disable_pe:
+            x = x + self.positional_embedding(diff_days.int().squeeze(2))
+
+        # Reduction
+        if self.reduction == "none":
+            return (x, diff_days, val_len), self.positional_embedding(torch.tensor([5]).cuda())
+        else:
+            if self.disable_pe:
+                return reduction_cluster(x, diff_days, val_len, self.reduction)
+            else:
+                return reduction_cluster(x, diff_days, val_len, self.reduction), self.positional_embedding(torch.tensor([5]).cuda())
+class CEVAEEmbedding(torch.nn.Module):
+    '''
+        output_size : embedding output
+        disable_embedding : continuous embedding on/off
+        disable_pe : Whether or not to add positional encoding by sequence in transformer
+        reduction : "mean" : Reduce to per-cluster average
+                    "date" : Reduce to average of DATE in cluster
     '''
     def __init__(self, args, output_size=128, disable_embedding=False, disable_pe=True, reduction="date", shift=False, use_treatment = False):
         super().__init__()
@@ -269,7 +391,58 @@ class CEEmbedding(torch.nn.Module):
                 return (x, diff_days, val_len), None
         else:
             return reduction_cluster(x, diff_days, val_len, self.reduction)
-    
+        
+class SyntheticEmbedding(torch.nn.Module):
+    '''
+        output_size : embedding output
+        disable_embedding : continuous embedding on/off
+        disable_pe : Whether or not to add positional encoding by sequence in transformer
+        reduction : "mean" : Reduce to per-cluster average
+                    "date" : Reduce to average of DATE in cluster
+    '''
+    def __init__(self, args, output_size=128, disable_embedding=False, disable_pe=True, reduction="date", shift=False):
+        super().__init__()
+        self.shift = shift
+        self.reduction = reduction
+        self.disable_embedding = disable_embedding
+        self.disable_pe = disable_pe
+        self.use_treatment = args.use_treatment
+        activation = nn.ELU()
+        if not disable_pe:
+            self.positional_embedding  = nn.Embedding(5, output_size)
+        print("Embedding applied to data")
+        nn_dim = emb_hidden_dim = emb_dim = output_size//4
+            
+        self.x1_NN = nn.Sequential(nn.Linear(1 if self.use_treatment else 2, emb_hidden_dim),
+                            activation,
+                            nn.Linear(emb_hidden_dim, nn_dim))
+        self.x2_NN = nn.Sequential(nn.Linear(1 if self.use_treatment else 2, emb_hidden_dim),
+                                    activation,
+                                    nn.Linear(emb_hidden_dim, nn_dim))
+        self.x3_NN = nn.Sequential(nn.Linear(1, emb_hidden_dim),
+                                        activation,
+                                        nn.Linear(emb_hidden_dim, nn_dim))
+        self.x4_NN = nn.Sequential(nn.Linear(1, emb_hidden_dim),
+                                        activation,
+                                        nn.Linear(emb_hidden_dim, nn_dim))
+        
+        if not disable_pe:
+            self.positional_embedding  = nn.Embedding(6, output_size)
+
+    def forward(self, x1, x2, x3, x4, val_len, diff_days):
+        x1_emb = self.x1_NN(x1)
+        x2_emb = self.x2_NN(x2) 
+        x3_emb = self.x3_NN(x3) 
+        x4_emb = self.x4_NN(x4) 
+        
+        tensors_to_concat = [tensor for tensor in [x1_emb, x2_emb, x3_emb, x4_emb] if tensor is not None]
+        x = torch.cat(tensors_to_concat, dim=-1)
+        if not self.disable_pe:
+            x = x + self.positional_embedding(diff_days.int())
+        if self.reduction == 'none':
+            return (x, diff_days, val_len), self.positional_embedding(torch.tensor([5]).cuda())
+        else:        
+            return reduction_cluster(x, diff_days, val_len, self.reduction)
 
 class CEVAE_Encoder(nn.Module): # -- [train all, conditioned by t]
     def __init__(self, input_dim, latent_dim, hidden_dim=128, shared_layers=3, pred_layers=3, t_pred_layers=3, t_embed_dim=8, yd_embed_dim=8, drop_out=0, t_classes=None, skip_hidden=False):
@@ -333,6 +506,55 @@ class CEVAE_Encoder(nn.Module): # -- [train all, conditioned by t]
         
         return mu, logvar, yd_pred, t_pred.squeeze()
 
+# class CEVAE_Decoder(nn.Module): [train seperated yd]
+#     def __init__(self, latent_dim, output_dim, hidden_dim=128, num_layers=2, t_classes=7):
+#         super(CEVAE_Decoder, self).__init__()
+        
+#         # Predict t from z
+#         t_layers = []
+#         for _ in range(num_layers):
+#             t_layers.append(nn.Linear(latent_dim if len(t_layers) == 0 else hidden_dim, hidden_dim))
+#             t_layers.append(nn.ReLU())
+#         t_layers.append(nn.Linear(hidden_dim, t_classes))
+#         self.fc_t = nn.Sequential(*t_layers)
+        
+#         # Predict y,d based on z and t
+#         self.yd_nns = nn.ModuleList([
+#             self._build_yd_predictor(latent_dim, hidden_dim, num_layers) for _ in range(t_classes)
+#         ])
+        
+#         # Directly predict x from z
+#         x_layers = []
+#         for _ in range(num_layers):
+#             x_layers.append(nn.Linear(latent_dim if len(x_layers) == 0 else hidden_dim, hidden_dim))
+#             x_layers.append(nn.ReLU())
+#         x_layers.append(nn.Linear(hidden_dim, output_dim))
+#         self.fc_x = nn.Sequential(*x_layers)
+    
+#     def _build_yd_predictor(self, latent_dim, hidden_dim, num_layers):
+#         yd_layers = []
+#         for _ in range(num_layers):
+#             yd_layers.append(nn.Linear(latent_dim if len(yd_layers) == 0 else hidden_dim, hidden_dim))
+#             yd_layers.append(nn.ReLU())
+#         yd_layers.append(nn.Linear(hidden_dim, 2))  # Assuming y,d output is of size 2
+#         return nn.Sequential(*yd_layers)
+    
+#     def forward(self, z, t_gt=None):
+#         # Predict t from z
+#         if t_gt==None:
+#             t_pred = self.fc_t(z)
+#             t_class = t_pred.argmax(dim=1)
+#         else:
+#             t_class = t_gt
+#             t_pred = None
+#         yd_preds = [yd_nn(z) for yd_nn in self.yd_nns]
+#         yd_pred = torch.stack([yd_preds[i][idx] for idx, i in enumerate(t_class)], dim=0)
+        
+#         # Directly predict x from z
+#         x_pred = self.fc_x(z)
+        
+#         return t_pred, yd_pred, x_pred
+
 class CEVAE_Decoder(nn.Module): #  [conditioned t, train overall yd]
     def __init__(self, latent_dim, output_dim, hidden_dim=128, t_pred_layers=2, shared_layers=2, t_embed_dim=16, drop_out=0, t_classes=7, skip_hidden=False):
         super(CEVAE_Decoder, self).__init__()
@@ -378,14 +600,19 @@ class CEVAE(nn.Module):
         super(CEVAE, self).__init__()
         d_model=args.num_features
         d_hid=args.hidden_dim
-        nlayers=args.cet_transformer_layers
+        nlayers=args.cevt_transformer_layers
         dropout=args.drop_out
         pred_layers=args.num_layers
         self.shift = args.shift
         self.unidir = args.unidir
         self.is_variational = args.variational
         
-        self.embedding = CEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        if args.is_municipal:
+            self.embedding = municipalCEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        elif args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
+        else:
+            self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
         
         self.encoder = CEVAE_Encoder(input_dim=d_model, latent_dim=d_hid, hidden_dim=d_model, shared_layers=nlayers, t_pred_layers=pred_layers , pred_layers=pred_layers, drop_out=dropout, t_embed_dim=d_hid, yd_embed_dim=d_hid)
         self.decoder = CEVAE_Decoder(latent_dim=d_hid, output_dim=d_model, hidden_dim=d_hid, t_pred_layers=pred_layers, shared_layers=nlayers, drop_out=dropout, t_embed_dim=d_hid)
@@ -431,62 +658,64 @@ class MLP(nn.Module):
 
     def forward(self, x):
         return self.layers(x)
-import os
-import csv
-def log_value(path, values, header=None):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    write_header = not os.path.exists(path)
-    with open(path, 'a') as f:
-        writer = csv.writer(f)
-        if write_header and header:
-            writer.writerow(header)
-        writer.writerow(values)
 
-class CETransformerEncoder(TransformerEncoder):
-    def __init__(self, encoder_layer, num_layers, d_model, pred_layers=1, norm=None, enable_nested_tensor=True, mask_check=True, residual_t=False, residual_x = False):
-        super().__init__(encoder_layer, num_layers, norm, enable_nested_tensor, mask_check)
-        self.x2t1 = MLP(d_model,d_model//2, 1, num_layers=pred_layers) # Linear
-        self.xt12t2 = MLP(d_model,d_model//2, 1, num_layers=pred_layers) # Linear
-        self.t1_emb = MLP(1,d_model//2, d_model, num_layers=pred_layers) # Linear
-        self.t2_emb = MLP(1,d_model//2, d_model, num_layers=pred_layers) # Linear
-        self.xt2yd = MLP(d_model,d_model//2, 2, num_layers=pred_layers) # Linear
-        self.yd_emb = MLP(2,d_model//2, d_model, num_layers=pred_layers) # Linear
-        
-        # layer norms for embeddings
-        self.norm_t1 = LayerNorm(d_model)
-        self.norm_t2 = LayerNorm(d_model)
-        self.norm_yd = LayerNorm(d_model)
+from torch.nn import LayerNorm
+class customTransformerEncoder(TransformerEncoder):
+    def __init__(self, encoder_layer, num_layers, d_model,
+                 pred_layers=1, norm=None,
+                 enable_nested_tensor=True, mask_check=True,
+                 residual_t=False, residual_x=False, log_dir="logs"):
+        super().__init__(encoder_layer, num_layers, norm,
+                         enable_nested_tensor, mask_check)
+
+        # ------- prediction / embedding heads -------
+        self.x2t1   = MLP(d_model, d_model//2, 1, num_layers=pred_layers)
+        self.xt12t2 = MLP(d_model, d_model//2, 1, num_layers=pred_layers)
+        self.xt2yd  = MLP(d_model, d_model//2, 2, num_layers=pred_layers)
+
+        self.t1_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers)
+        self.t2_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers)
+        self.yd_emb = MLP(2, d_model//2, d_model, num_layers=pred_layers)
+
+        # -------- LayerNorm & learnable gates --------
+        self.ln_out = nn.LayerNorm(d_model)
+        # self.gamma_t1 = nn.Parameter(torch.tensor(1e-3))
+        # self.gamma_t2 = nn.Parameter(torch.tensor(1e-3))
+        # self.gamma_yd = nn.Parameter(torch.tensor(1e-3))
+        self.gamma_t1=self.gamma_t2=self.gamma_yd=torch.tensor(1).detach()
+
         self.final_norm = nn.LayerNorm(d_model)
 
-        
         self.residual_t = residual_t
         self.residual_x = residual_x
 
-    def forward(self, src: Tensor, mask: Tensor | None = None, src_key_padding_mask: Tensor | None = None, is_causal: bool | None = None, val_len: Tensor | None = None, intervene_t: Tensor | None = None) -> Tensor:
-        r"""Pass the input through the encoder layers in turn.
+        # ---------- logging ----------
+        self.log_dir = log_dir
+        self.step = 0            # global step counter
 
-        Args:
-            src: the sequence to the encoder (required).
-            mask: the mask for the src sequence (optional).
-            src_key_padding_mask: the mask for the src keys per batch (optional).
-            is_causal: If specified, applies a causal mask as ``mask``.
-                Default: ``None``; try to detect a causal mask.
-                Warning:
-                ``is_causal`` provides a hint that ``mask`` is the
-                causal mask. Providing incorrect hints can result in
-                incorrect execution, including forward and backward
-                compatibility.
+    # ---------- helper for norm extraction ----------
+    @staticmethod
+    def _pool_repr(x: Tensor, val_idx: Tensor, val_len: Tensor):
+        """return [B, D] pooled representation"""
+        if val_len is not None:            # bidirectional ⇒ mean over valid tokens
+            mask = (torch.arange(x.size(1), device=x.device)[None, :]
+                    < val_len[:, None])
+            return (x * mask.unsqueeze(-1).float()).sum(1) / mask.sum(1).unsqueeze(-1)
+        else:                              # uni-directional ⇒ last token
+            return x[torch.arange(x.size(0), device=x.device), val_idx]
 
-        Shape:
-            see the docs in Transformer class.
-        """
+    def forward(self, src: Tensor, mask: Tensor | None = None,
+                src_key_padding_mask: Tensor | None = None,
+                is_causal: bool | None = None, val_len: Tensor | None = None,
+                intervene_t: Tensor | None = None):
+
+        # ---- standard boilerplate for masks (unchanged) ----
         src_key_padding_mask = F._canonical_mask(
             mask=src_key_padding_mask,
             mask_name="src_key_padding_mask",
             other_type=F._none_or_dtype(mask),
             other_name="mask",
-            target_type=src.dtype
-        )
+            target_type=src.dtype)
 
         mask = F._canonical_mask(
             mask=mask,
@@ -494,129 +723,107 @@ class CETransformerEncoder(TransformerEncoder):
             other_type=None,
             other_name="",
             target_type=src.dtype,
-            check_other=False,
-        )
+            check_other=False)
+
         output = src
-        convert_to_nested = False
-        val_idx = val_len - 1
-        first_layer = self.layers[0]
-        src_key_padding_mask_for_layers = src_key_padding_mask
-        why_not_sparsity_fast_path = ''
-        str_first_layer = "self.layers[0]"
-        batch_first = first_layer.self_attn.batch_first
+        val_idx = val_len - 1 if val_len is not None else None
+        t1 = t2 = yd = None               # placeholders for return
 
-        seq_len = _get_seq_len(src, batch_first)
-        is_causal = _detect_is_causal_mask(mask, is_causal, seq_len)
-
+        # --------- iterate over Transformer layers ----------
         for idx, mod in enumerate(self.layers):
-            output = mod(
-                output,
-                src_mask=mask,
-                is_causal=is_causal,
-                src_key_padding_mask=src_key_padding_mask
-            )
+            output = mod(output, src_mask=mask, is_causal=is_causal,
+                         src_key_padding_mask=src_key_padding_mask)
 
-            # --- Layer 0: predict t1 and inject ---
-            if idx == 0:
-                # output_emb: [B, D]
-                if mask is not None:
-                    output_emb = output[torch.arange(output.size(0)), val_idx]
-                else:
-                    val_mask = (torch.arange(output.size(1), device=output.device)[None, :] 
-                                < val_len[:, None])
-                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1)
-                    output_emb /= val_mask.sum(1).unsqueeze(-1).float()
+            # ---------- pooled repr ----------
+            output_emb = self._pool_repr(output, val_idx, val_len)  # [B,D]
 
-                # t1_pred: [B,1]
-                t1_pred = self.x2t1(output_emb)
-                # replace clamp with sigmoid for smooth grad:
-                t1_pred = torch.sigmoid(t1_pred)
-                t1 = intervene_t[1] if intervene_t is not None and intervene_t[0]=='t1' else t1_pred
+            # ---------- each custom head ----------
+            if idx == 0:   # ------ T1 ------
+                t1_pred = torch.sigmoid(self.x2t1(output_emb))
+                t1 = (intervene_t[1] if intervene_t is not None and
+                                   intervene_t[0] == 't1' else t1_pred)
+                t1_emb = self.t1_emb(t1)     # [B,D]
 
-                # embed + norm
-                t1_emb = self.t1_emb(t1)               # [B, D]
-                t1_emb = self.norm_t1(t1_emb)          # <-- LayerNorm
-                t1_res  = t1_emb.clone()
-                x1_res  = output_emb.clone()
+                # ----- LayerNorm(output) + γ·t_emb -----
+                ln_output = self.ln_out(output)
+                output = ln_output + self.gamma_t1 * t1_emb.unsqueeze(1)
 
-                # inject
-                output = output + t1_emb.unsqueeze(1)
+                # # ----- logging -----
+                # _log(f"{self.log_dir}/norm_log.csv",
+                #      ["step","layer","out_norm_before","out_norm_after",
+                #       "t_emb_norm","gamma"],
+                #      [self.step, idx,
+                #       output_emb.norm(dim=-1).mean().item(),
+                #       ln_output.norm(dim=-1).mean().item(),
+                #       t1_emb.norm(dim=-1).mean().item(),
+                #       self.gamma_t1.item()])
 
-            # --- Layer 1: predict t2 and inject ---
-            elif idx == 1:
-                if mask is not None:
-                    output_emb = output[torch.arange(output.size(0)), val_idx]
-                else:
-                    val_mask = (torch.arange(output.size(1), device=output.device)[None, :] 
-                                < val_len[:, None])
-                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1)
-                    output_emb /= val_mask.sum(1).unsqueeze(-1).float()
+                x1_res, t1_res = output_emb.detach(), t1_emb.detach()
 
-                # optional residual connections
-                if self.residual_t:
-                    output_emb = output_emb + t1_res
-                if self.residual_x:
-                    output_emb = output_emb + x1_res
-
-                t2_pred = self.xt12t2(output_emb)
-                t2_pred = torch.sigmoid(t2_pred)
-                t2 = intervene_t[1] if intervene_t is not None and intervene_t[0]=='t2' else t2_pred
-
+            elif idx == 1:   # ------ T2 ------
+                if self.residual_t: output_emb = output_emb + t1_res
+                if self.residual_x: output_emb = output_emb + x1_res
+                t2_pred = torch.sigmoid(self.xt12t2(output_emb))
+                t2 = (intervene_t[1] if intervene_t is not None and
+                                   intervene_t[0] == 't2' else t2_pred)
                 t2_emb = self.t2_emb(t2)
-                t2_emb = self.norm_t2(t2_emb)          # <-- LayerNorm
-                t_res  = t1_res + t2_emb.clone()
-                x2_res  = output_emb.clone()
 
-                output = output + t2_emb.unsqueeze(1)
+                ln_output = self.ln_out(output)
+                output = ln_output + self.gamma_t2 * t2_emb.unsqueeze(1)
 
-            # --- Layer 2: predict yd and inject ---
-            elif idx == 2:
-                if mask is not None:
-                    output_emb = output[torch.arange(output.size(0)), val_idx]
-                else:
-                    val_mask = (torch.arange(output.size(1), device=output.device)[None, :] 
-                                < val_len[:, None])
-                    output_emb = (output * val_mask.unsqueeze(-1).float()).sum(1)
-                    output_emb /= val_mask.sum(1).unsqueeze(-1).float()
+                # _log(f"{self.log_dir}/norm_log.csv",
+                #      ["step","layer","out_norm_before","out_norm_after",
+                #       "t_emb_norm","gamma"],
+                #      [self.step, idx,
+                #       output_emb.norm(dim=-1).mean().item(),
+                #       ln_output.norm(dim=-1).mean().item(),
+                #       t2_emb.norm(dim=-1).mean().item(),
+                #       self.gamma_t2.item()])
 
-                if self.residual_t:
-                    output_emb = output_emb + t_res
-                if self.residual_x:
-                    output_emb = output_emb + x2_res
+                x2_res, t_res = output_emb.detach(), (t1_res + t2_emb.detach())
 
-                yd = self.xt2yd(output_emb)
-                yd = torch.sigmoid(yd)
+            elif idx == 2:   # ------ YD ------
+                if self.residual_t: output_emb = output_emb + t_res
+                if self.residual_x: output_emb = output_emb + x2_res
+                yd = torch.sigmoid(self.xt2yd(output_emb))   # [B,2]
                 yd_emb = self.yd_emb(yd)
-                yd_emb = self.norm_yd(yd_emb)          # <-- LayerNorm
-                x3_res  = output_emb.clone()
 
-                output = output + yd_emb.unsqueeze(1)
+                ln_output = self.ln_out(output)
+                output = ln_output + self.gamma_yd * yd_emb.unsqueeze(1)
 
-            # --- Layer 3: optional residual x ---
+                # _log(f"{self.log_dir}/norm_log.csv",
+                #      ["step","layer","out_norm_before","out_norm_after",
+                #       "t_emb_norm","gamma"],
+                #      [self.step, idx,
+                #       output_emb.norm(dim=-1).mean().item(),
+                #       ln_output.norm(dim=-1).mean().item(),
+                #       yd_emb.norm(dim=-1).mean().item(),
+                #       self.gamma_yd.item()])
+
+                x3_res = output_emb.detach()
+
             elif idx == 3 and self.residual_x:
                 output = output + x3_res.unsqueeze(1)
 
-        if convert_to_nested:
-            output = output.to_padded_tensor(0., src.size())
-
-        # if self.norm is not None:
-        #     output = self.norm(output)
+        # -------- final layer norm --------
         output = self.final_norm(output)
-        
+        self.step += 1                     # update global step
+
         return output, (t1, t2), yd
 
-class CEVT(nn.Module):
+class CEVTransformer(nn.Module):
     def __init__(self, args):
-        super(CEVT, self).__init__()
+        super(CEVTransformer, self).__init__()
         d_model=args.num_features
         nhead=args.num_heads
         d_hid=args.hidden_dim
-        nlayers=args.cet_transformer_layers
+        nlayers=args.cevt_transformer_layers
         dropout=args.drop_out
         pred_layers=args.num_layers
         self.shift = args.shift
         self.unidir = args.unidir
         self.is_variational = args.variational
+        self.is_synthetic = args.is_synthetic
         
         if args.variational:
             print("variational z sampling")
@@ -627,11 +834,14 @@ class CEVT(nn.Module):
             print("unidirectional attention applied")
         else:
             print("maxpool applied")
-        
-        self.embedding = CEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
-        
+        if args.is_municipal:
+            self.embedding = municipalCEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+        elif args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
+        else:
+            self.embedding = CEVAEEmbedding(args, output_size=d_model, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
         encoder_layers = TransformerEncoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
-        self.transformer_encoder = CETransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
+        self.transformer_encoder = customTransformerEncoder(encoder_layers, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
 
         # Vairatioanl Z
         self.fc_mu = nn.Linear(d_model, d_model)
@@ -650,13 +860,13 @@ class CEVT(nn.Module):
         self.zt2yd = MLP(d_model, d_model//2, 2, num_layers=pred_layers)
 
         self.linear_decoder = MLP(d_model, d_model, d_model, num_layers=1) # Linear
-    
+
     def generate_square_subsequent_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
         mask = mask.masked_fill(mask == 0, True).masked_fill(mask == 1, False)
         return mask
 
-    def init_weights(self, c):
+    def init_weights(self, c=None):
         initrange = 0.1
         # For embedding layers
         if hasattr(self.embedding, 'weight'):
@@ -669,7 +879,7 @@ class CEVT(nn.Module):
                     nn.init.xavier_uniform_(param)
         
         # For MLP layers
-        for mlp in [self.z2t, self.t_emb, self.zt2yd]:
+        for mlp in [self.z2t, self.t1_emb, self.t2_emb, self.zt12t2, self.zt2yd]:
             for layer in mlp.layers:
                 if isinstance(layer, nn.Linear):
                     layer.weight.data.uniform_(-initrange, initrange)
@@ -734,6 +944,101 @@ class CEVT(nn.Module):
 
         return x, x_recon, (enc_yd, torch.cat([enc_t1, enc_t2], dim=1)), (dec_yd, torch.cat([dec_t1, dec_t2], dim=1)), (z_mu, z_logvar)
 
+class municipalCEVTransformer(nn.Module):
+    '''
+        input_size : TableEmbedding 
+        hidden_size : Transformer Encoder 
+        output_size : y, d (2)
+        num_layers : Transformer Encoder Layer 
+        num_heads : Multi Head Attention Head 
+        drop_out : DropOut 
+        disable_embedding : continuous embedding on/off
+    '''
+    def __init__(self, args):
+        super(municipalCEVTransformer, self).__init__()
+        
+        d_model=args.num_features
+        nhead=args.num_heads
+        d_hid=args.hidden_dim
+        nlayers=args.cevt_transformer_layers
+        dropout=args.drop_out
+        pred_layers=args.num_layers
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
+        elif args.is_municipal: 
+            self.embedding = municipalCEVAEEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+        else:        
+            self.embedding = TableEmbedding(output_size=args.num_features, disable_embedding = args.disable_embedding, disable_pe=False, reduction="none", use_treatment=args.use_treatment) #reduction="date")
+        self.cls_token = nn.Parameter(torch.randn(1, 1, args.num_features))
+        self.transformer_layer = nn.TransformerEncoderLayer(
+            d_model=args.num_features,
+            nhead=args.num_heads,
+            dim_feedforward=args.hidden_dim, 
+            dropout=args.drop_out,
+            batch_first=True,
+            norm_first=True
+        )
+        self.transformer_encoder = TransformerEncoder(self.transformer_layer, args.num_layers)
+        # self.transformer_encoder = customTransformerEncoder(self.transformer_layer, nlayers, d_model, pred_layers=pred_layers, residual_t=args.residual_t, residual_x=args.residual_x)
+
+        self.fc = nn.Linear(args.num_features, args.output_size)  
+        
+        # Vairatioanl Z
+        self.fc_mu = nn.Linear(d_model, d_model)
+        self.fc_logvar = nn.Linear(d_model, d_model)
+
+        decoder_layers = TransformerDecoderLayer(d_model, nhead, d_hid, dropout, batch_first=True, norm_first=True)
+        self.transformer_decoder = TransformerDecoder(decoder_layers, nlayers)
+        self.max_pool = nn.MaxPool1d(kernel_size=124, stride=1)
+
+        self.d_model = d_model
+        
+        self.z2t = MLP(d_model, d_model//2, 1, num_layers=pred_layers)
+        self.t1_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers)
+        self.t2_emb = MLP(1, d_model//2, d_model, num_layers=pred_layers)
+        self.zt12t2 = MLP(d_model, d_model//2, 1, num_layers=pred_layers)
+        self.zt2yd = MLP(d_model, d_model//2, 2, num_layers=pred_layers)
+
+        self.linear_decoder = MLP(d_model, d_model, d_model, num_layers=1) # Linear
+
+        self.init_weights()
+        self.args=args
+    def init_weights(self) -> None:
+        initrange = 0.1
+        for module in self.embedding.modules():
+                if isinstance(module, nn.Linear) :
+                    module.weight.data.uniform_(-initrange, initrange)
+                    if module.bias is not None:
+                        module.bias.data.zero_()
+                elif isinstance(module, nn.Embedding):
+                    module.weight.data.uniform_(-initrange, initrange)
+        self.fc.bias.data.zero_()
+        self.fc.weight.data.uniform_(-initrange, initrange)
+
+    def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_MAP=False):
+        if self.embedding.reduction != "none":
+            embedded, cls_token_pe = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+        else:
+            (embedded, diff_days, _), cls_token_pe = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days) # embedded:(32, 124, 128)
+        cls_token = self.cls_token.expand(embedded.size(0), -1, -1) + cls_token_pe.unsqueeze(0).expand(embedded.size(0), -1, -1)
+        input_with_cls = torch.cat([cls_token, embedded], dim=1)
+        mask = ~(torch.arange(input_with_cls.size(1)).expand(input_with_cls.size(0), -1).cuda() < (val_len+1).unsqueeze(1)).cuda() # val_len + 1 ?
+        src_mask = None
+        
+        z = self.transformer_encoder(input_with_cls, src_key_padding_mask=mask.bool())  
+        # z, (enc_t1, enc_t2), enc_yd = self.transformer_encoder(input_with_cls, mask=src_mask, src_key_padding_mask=mask.bool(), val_len=val_len)
+        cls_output = z[:, 0, :] 
+        dec_yd = self.fc(cls_output) 
+        x=input_with_cls
+        x_recon=torch.zeros_like(x)
+        enc_yd=torch.zeros_like(dec_yd)
+        dec_t1=torch.zeros_like(torch.zeros([dec_yd.size(0), 1]).cuda())
+        dec_t2=torch.zeros_like(torch.zeros([dec_yd.size(0), 1]).cuda())
+        enc_t1=torch.zeros_like(torch.zeros([dec_yd.size(0), 1]).cuda())
+        enc_t2=torch.zeros_like(torch.zeros([dec_yd.size(0), 1]).cuda())
+        z_mu=torch.zeros_like(z)
+        z_logvar=torch.zeros_like(z)
+        return x, x_recon, (enc_yd, torch.cat([enc_t1, enc_t2], dim=1)), (dec_yd, torch.cat([dec_t1, dec_t2], dim=1)), (z_mu, z_logvar)
 
 #############################################################################
 ### iTransformer
@@ -912,9 +1217,15 @@ class TriangularCausalMask():
 class iTransformer(nn.Module):
     def __init__(self, args, input_size, hidden_size, output_size, num_layers, num_heads, drop_out):
         super(iTransformer, self).__init__()
+        self.is_synthetic = args.is_synthetic
         self.max_len = 124 # hard-coding (seq_len)
         
-        self.embedding = TableEmbedding_iTrans(output_size=input_size, disable_pe=True, use_treatment=args.use_treatment)
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift)
+        elif args.is_municipal: 
+            self.embedding = municipalCEVAEEmbedding(args, output_size=args.num_features * 2, disable_embedding = False, disable_pe=False, reduction="none", shift= args.shift, use_treatment=args.use_treatment)
+        else: 
+            self.embedding = TableEmbedding_iTrans(output_size=input_size, disable_pe=True, use_treatment=args.use_treatment)
         
         # Encoder-only architecture
         self.encoder = Encoder_iTrans(
@@ -932,10 +1243,10 @@ class iTransformer(nn.Module):
 
         
         
-    def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days):
+    def forward(self, cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_ce=False):
         # Embedding
         # B L N -> B N E                (B L N -> B L E in the vanilla Transformer)
-        (embedded, diff_days, _), _ = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)  # (B, L, E) == (B, N, E)
+        (embedded, diff_days, _), _ = self.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_ce)  # (B, L, E) == (B, N, E)
 
         B, L, E = embedded.shape
         N = L
@@ -966,9 +1277,11 @@ class EpsilonLayer(torch.nn.Module):
         epsilon = nn.Parameter(torch.randn_like(input), requires_grad=True)
         return epsilon
 
+
+
 class DragonNet(nn.Module):
     """
-    W/o l2 regularizer
+    no l2 regularizer. vs tf code
         """
     def __init__(self, args, 
                 input_size=128, hidden_size=200, output_size=2, num_treatments=7, disable_embedding=False):
@@ -976,7 +1289,12 @@ class DragonNet(nn.Module):
         
         if disable_embedding:
             input_size = 12
-        self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
+        elif args.is_municipal: 
+            self.embedding = municipalCEVAEEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        else: 
+            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         # Representation
         self.representation = nn.Sequential(
             nn.Linear(input_size, hidden_size),
@@ -1079,7 +1397,12 @@ class TarNet(nn.Module):
         super(TarNet, self).__init__()
         if disable_embedding:
             input_size = 12
-        self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
+        if args.is_synthetic:
+            self.embedding = SyntheticEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift)
+        elif args.is_municipal: 
+            self.embedding = municipalCEVAEEmbedding(args, output_size=args.num_features, disable_embedding = False, disable_pe=True, reduction="mean", shift= args.shift, use_treatment=args.use_treatment)
+        else: 
+            self.embedding = TableEmbedding(input_size, disable_embedding = disable_embedding, disable_pe=True, reduction="mean",  use_treatment=args.use_treatment)
         # Representation
         self.representation = nn.Sequential(
             nn.Linear(input_size, hidden_size),
@@ -1170,4 +1493,3 @@ class TarNet(nn.Module):
         epsilons = self.epsilon_layer(t_pred)
         
         return y0_pred, y1_pred, y2_pred, y3_pred, y4_pred, y5_pred, y6_pred, t_pred, epsilons
-

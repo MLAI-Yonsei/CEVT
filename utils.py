@@ -35,7 +35,6 @@ class Tabledata(Dataset):
             yd.append(group[['y', 'd']].tail(1))
         yd = pd.concat(yd)
 
-        # Normalize continuous data
         for c in ["age", "dis", "danger", "CT_R", "CT_E"]:
             # dis : 0~6
             # danger : 3~11
@@ -47,7 +46,6 @@ class Tabledata(Dataset):
             self.a_y, self.b_y = meanvar_col(yd, "y")
             self.a_d, self.b_d = meanvar_col(yd, "d")
 
-        ## Classify and store data by characteristics ##
         self.cluster = data.iloc[:,0].values.astype('float32')
         
         if not binary_t:
@@ -76,7 +74,6 @@ class Tabledata(Dataset):
         
         self.yd = torch.stack([y, d], dim=1)
         
-        # Sort and store discrete data
         self.cat_cols = self.cat_X.columns
         self.cat_map = {col: {cat: i for i, cat in enumerate(self.cat_X[col].cat.categories)} for col in self.cat_cols}
         self.cat_X = self.cat_X.apply(lambda x: x.cat.codes)
@@ -86,15 +83,16 @@ class Tabledata(Dataset):
 
     def __getitem__(self, index):
         '''
-            [batch x padding x embedding]
-            cont_tensor_p: Padded patient-related continuous data 
-            cont_tensor_c: Padded cluster-related continuous data 
-            cat_tensor_p: Padded patient-related discrete data 
-            cat_tensor_c: Padded cluster-related discrete data 
-            data_len: Returns the number of valid patients per cluster 
-            y: Correct answer label 
-            diff_tensor: Returns the valid date per cluster
+            [batch x padding x embedding].
+            cont_tensor_p: padded patient-related continuous data  
+            cont_tensor_c: padded cluster-related continuous data  
+            cat_tensor_p: patient-related discrete data with padding  
+            cat_tensor_c: Padded cluster related discrete data  
+            data_len : Return data of the number of valid patients by cluster
+            y : Correct answer label
+            diff_tensor: cluster-specific effective date return data
         '''
+
         diff_days = torch.from_numpy(self.diff_days[self.cluster == index]).unsqueeze(1)
         diff_tensor = self.diff_tensor.clone()
         diff_tensor[:diff_days.shape[0]] = diff_days
@@ -113,10 +111,215 @@ class Tabledata(Dataset):
         
         treatment = torch.mean(torch.tensor(self.treatment[self.cluster == index]), dim=0) # t1: dis|t2: danger
         return cont_tensor_p, cont_tensor_c, cat_tensor_p, cat_tensor_c, data_len, yd, diff_tensor, treatment
+
+import torch
+from torch.utils.data import Dataset
+import pandas as pd
+
+class MunicipalTabledata(Dataset):
+    def __init__(self, args, data, scale='minmax', binary_t=False):
+        self.use_treatment = args.use_treatment
+
+        # Determine the number of categorical and continuous columns dynamically
+        self.cat_feature_count = len([
+            'gender', 
+            'birthyear_category_1930-1959',
+            'birthyear_category_1960-1989',
+            'birthyear_category_1990s+',
+            'birthyear_category_Before 1930'
+        ])
+
+        self.cont_feature_count = len(['test_R', 'test_E', 'symptom', 'distance', 'danger'])
+        MAX_CLUSTER_SIZE = args.municipal_max_cluster
+        # Padding tensors
+        self.diff_tensor = torch.zeros([MAX_CLUSTER_SIZE, 1])
+        # if args.use_treatment:
+        #     if not args.single_treatment:
+        #         self.cont_tensor = torch.zeros([MAX_CLUSTER_SIZE, self.cont_feature_count - 2])
+        #     else:
+        #         self.cont_tensor = torch.zeros([MAX_CLUSTER_SIZE, self.cont_feature_count - 1])
+        # else:
+        #     self.cont_tensor = torch.zeros([MAX_CLUSTER_SIZE, self.cont_feature_count])
+
+        self.cont_tensor = torch.zeros([MAX_CLUSTER_SIZE, self.cont_feature_count])
+        self.cat_tensor = torch.zeros([MAX_CLUSTER_SIZE, self.cat_feature_count])
+        yd = []
+        for _, group in data.groupby('transmission_cluster'):
+            yd.append(group[['y', 'd']].tail(1))
+        yd = pd.concat(yd)
+
+        # Data preprocessing
+        # Normalize continuous data
+        for c in ["test_R", "test_E", "distance", "danger"]:
+            minmax_col(data, c) if scale == 'minmax' else meanvar_col(data, c)
+
+        # Store values for inverse transformation
+        if scale == 'minmax':
+            self.a_y, self.b_y = minmax_col(yd, "y")
+            self.a_d, self.b_d = minmax_col(yd, "d")
+        elif scale == 'meanvar':
+            self.a_y, self.b_y = meanvar_col(yd, "y")
+            self.a_d, self.b_d = meanvar_col(yd, "d")
+
+        # Feature classification and storage
+        self.cluster = data['transmission_cluster'].values.astype('float32')
+
+        if not binary_t:
+            self.treatment = data[['distance', 'danger']].values.astype('float32') if not args.single_treatment else data['danger'].values.astype('float32')
+        else:
+            raise ValueError('Binary treatment is not supported')
+
+        # if args.use_treatment:
+        #     if not args.single_treatment:
+        #         self.cont_X = data[['test_R', 'test_E', 'symptom']].values.astype('float32')
+        #     else:
+        #         self.cont_X = data[['test_R', 'test_E', 'symptom', 'distance']].values.astype('float32')
+        # else:
+        #     self.cont_X = data[['test_R', 'test_E', 'symptom', 'distance', 'danger']].values.astype('float32')
+
+        self.cont_X = data[['test_R', 'test_E', 'symptom', 'distance', 'danger']].values.astype('float32')
+
+        self.cat_X = data[[
+            'gender', 
+            'birthyear_category_1930-1959',
+            'birthyear_category_1960-1989',
+            'birthyear_category_1990s+',
+            'birthyear_category_Before 1930'
+        ]].astype('category')
+        self.diff_days = data['diff_days'].values.astype('float32')
+
+        # Tukey transformation for labels
+        y = torch.tensor(yd['y'].values.astype('float32'))
+        d = torch.tensor(yd['d'].values.astype('float32'))
+        if args.tukey:
+            y = tukey_transformation(y, args)
+            d = tukey_transformation(d, args)
+
+        self.yd = torch.stack([y, d], dim=1)
+
+        # Categorize and encode categorical data
+        self.cat_cols = self.cat_X.columns
+        self.cat_map = {col: {cat: i for i, cat in enumerate(self.cat_X[col].cat.categories)} for col in self.cat_cols}
+        self.cat_X = self.cat_X.apply(lambda x: x.cat.codes)
+        self.cat_X = torch.from_numpy(self.cat_X.to_numpy()).long()
+
+    def __len__(self):
+        return len(np.unique(self.cluster))
+
+    def __getitem__(self, index):
+        """
+        Args:
+            index: Cluster index
+        Returns:
+            cont_tensor_p: Padded continuous patient data
+            cont_tensor_c: Padded continuous cluster data
+            cat_tensor_p: Padded categorical patient data
+            cat_tensor_c: Padded categorical cluster data
+            data_len: Number of valid patients in the cluster
+            y: Label
+            diff_tensor: Valid dates for the cluster
+            treatment: Mean treatment values for the cluster
+        """
+        diff_days = torch.from_numpy(self.diff_days[self.cluster == index]).unsqueeze(1)
+        diff_tensor = self.diff_tensor.clone()
+        diff_tensor[:diff_days.shape[0]] = diff_days
+
+        cont_X = torch.from_numpy(self.cont_X[self.cluster == index])
+        data_len = cont_X.shape[0]
+        cont_tensor = self.cont_tensor.clone()
+        cont_tensor[:cont_X.shape[0]] = cont_X
+
+        cat_X = self.cat_X[self.cluster == index]
+        cat_tensor = self.cat_tensor.clone()
+        cat_tensor[:cat_X.shape[0]] = cat_X
+
+        # Dynamically adjust slicing ranges
+        cat_tensor_p = cat_tensor[:, :self.cat_feature_count]
+        cat_tensor_c = torch.zeros([cat_tensor.shape[0], 0])  # Placeholder for consistency
+
+        cont_tensor_p = cont_tensor[:, :3]
+        cont_tensor_c = cont_tensor[:, 3:]
+        yd = self.yd[index]
+        treatment = torch.mean(torch.tensor(self.treatment[self.cluster == index]), dim=0)
+
+        return cont_tensor_p, cont_tensor_c, cat_tensor_p, cat_tensor_c, data_len, yd, diff_tensor, treatment
+
+
+class SyntheticDataset(Dataset):
+    def __init__(self, args, data_frames):
+        self.use_treatment = args.use_treatment
+        self.single_treatment = args.single_treatment
+        self.X1 = torch.tensor(data_frames['X1'].values, dtype=torch.float32)
+        self.X2 = torch.tensor(data_frames['X2'].values, dtype=torch.float32)
+        self.X3 = torch.tensor(data_frames['X3'].values, dtype=torch.float32)
+        self.X4 = torch.tensor(data_frames['X4'].values, dtype=torch.float32)
+        self.T1 = torch.tensor(data_frames['T1'].values, dtype=torch.float32)
+        self.T2 = torch.tensor(data_frames['T2'].values, dtype=torch.float32)
+        self.Y = torch.tensor(data_frames['Y'].values, dtype=torch.float32)
+        
+        if args.scaling == 'minmax':
+            self.Y, self.a_y, self.b_y = minmax_tensor(self.Y)
+            self.T1, self.a_t1, self.b_t1 = minmax_tensor(self.T1)
+            self.T2, self.a_t2, self.b_t2 = minmax_tensor(self.T2)
+            
+            self.X1, _, _ = minmax_tensor(self.X1)
+            self.X2, _, _ = minmax_tensor(self.X2)
+            self.X3, _, _ = minmax_tensor(self.X3)
+            self.X4, _, _ = minmax_tensor(self.X4)
+            
+            self.a_d, self.b_d = None, None
+        
+        if not args.use_treatment:
+            self.X1 = torch.stack([self.X1, self.X2], dim=-1)
+            self.X2 = torch.stack([self.T1, self.T2], dim=-1)
+            
+    def __len__(self):
+        return len(self.Y)
+    
+    def __getitem__(self, idx):
+        x1 = self.X1[idx]
+        x2 = self.X2[idx]
+        x3 = self.X3[idx]
+        x4 = self.X4[idx]
+        y = self.Y[idx]
+        # y = torch.sum(self.P[idx])
+        t1 = self.T1[idx]
+        t2 = self.T2[idx]
+
+        t = torch.cat((t1.unsqueeze(0), t2.unsqueeze(0)), dim=0) if not self.single_treatment else t2
+
+        index_tensor = torch.tensor([0, 0, 0, 0, 0], dtype=torch.float).cuda()
+        
+        if self.use_treatment:
+           x1 = x1.unsqueeze(-1)
+           x2 = x2.unsqueeze(-1)
+           
+        x3 = x3.unsqueeze(-1)
+        x4 = x4.unsqueeze(-1) 
+        
+        x1_t = torch.zeros(5, x1.shape[0])
+        x1_t[0, :] = x1
+        
+        x2_t = torch.zeros(5 ,x2.shape[0])
+        x2_t[0, :] = x2
+        
+        x3_t = torch.zeros(5, 1)
+        x3_t[0, :] = x3
+        
+        x4_t = torch.zeros(5, 1)
+        x4_t[0, :] = x4
+        
+        return x1_t, x2_t, x3_t, x4_t, x1.shape[0], torch.stack([y,torch.zeros_like(y)]).cuda(), index_tensor, t
+
 ## MinMax Scaling Functions ------------------------------------
 def minmax_col(data, name):
-    minval , maxval = data[name].min(), data[name].max()
-    data[name]=(data[name]-data[name].min())/(data[name].max()-data[name].min())
+    minval, maxval = data[name].min(), data[name].max()
+    
+    if maxval == minval:
+        data[name] = 0
+    else:
+        data[name] = (data[name] - minval) / (maxval - minval)
+    
     return minval, maxval
 
 def minmax_tensor(tensor):
@@ -131,6 +334,52 @@ def restore_minmax(data, minv, maxv):
     maxv=0 if maxv==None else maxv
     data = (data * (maxv - minv)) + minv
     return data
+
+class SyntheticTimeSeriesDataset(Dataset):
+    def __init__(self, args, data_frames):
+        self.use_treatment = args.use_treatment
+        self.X1 = torch.tensor(np.array([df['X1'].values for df in data_frames]), dtype=torch.float32)
+        self.X2 = torch.tensor(np.array([df['X2'].values for df in data_frames]), dtype=torch.float32)
+        self.X3 = torch.tensor(np.array([df['X3'].values for df in data_frames]), dtype=torch.float32)
+        self.X4 = torch.tensor(np.array([df['X4'].values for df in data_frames]), dtype=torch.float32)
+        self.T1 = torch.tensor(np.array([df['T1'].values for df in data_frames]), dtype=torch.float32)
+        self.T2 = torch.tensor(np.array([df['T2'].values for df in data_frames]), dtype=torch.float32)
+        # self.P = torch.tensor(np.array([df['P'].values for df in data_frames]), dtype=torch.float32)
+        self.Y = torch.tensor(np.array([df['Y'].values for df in data_frames]), dtype=torch.float32)[:,0]
+        
+        if args.scaling == 'minmax':
+            self.Y, self.a_y, self.b_y = minmax_tensor(self.Y)
+            self.a_d, self.b_d = None, None
+        
+        if not args.use_treatment:
+            self.X1 = torch.stack([self.X1, self.X2], dim=-1)
+            self.X2 = torch.stack([self.T1, self.T2], dim=-1)
+            
+    def __len__(self):
+        return len(self.Y)
+    
+    def __getitem__(self, idx):
+        x1 = self.X1[idx]
+        x2 = self.X2[idx]
+        x3 = self.X3[idx]
+        x4 = self.X4[idx]
+        y = self.Y[idx]
+        # y = torch.sum(self.P[idx])
+        t1 = self.T1[idx]
+        t2 = self.T2[idx]
+
+        t = torch.cat((t1.unsqueeze(0), t2.unsqueeze(0)), dim=0)
+
+        index_tensor = torch.tensor([0, 1, 2, 3, 4], dtype=torch.float).cuda()
+        x1_length = x1.shape[0]
+        
+        if self.use_treatment:
+           x1 = x1.unsqueeze(-1)
+           x2 = x2.unsqueeze(-1)
+           
+        x3 = x3.unsqueeze(-1)
+        x4 = x4.unsqueeze(-1) 
+        return x1, x2, x3, x4, x1_length, torch.stack([y,torch.zeros_like(y)]).cuda(), index_tensor, torch.mean(t, dim=-1)
 
 ## MinMax Scaling Functions ------------------------------------
 def minmax_col(data, name):
@@ -190,9 +439,8 @@ def train(args, data, model, optimizer, criterion, epoch, warmup_iter=0, lamb=0.
     if use_treatment:
         gt_t = t[0] # t1: dis|t2: danger
         x, x_reconstructed, (enc_yd_pred, enc_t_pred), (dec_yd_pred, dec_t_pred), (z_mu, z_logvar) = out
-        
         if args.model == 'cevt':
-            loss, *ind_losses = cevt_loss(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, gt_t, y[:,0] , y[:,1], criterion, lambdas, val_len=len)
+            loss, *ind_losses = cevtransformer_loss(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, gt_t, y[:,0] , y[:,1], criterion, lambdas, val_len=len)
         elif args.model == 'cevae':
             loss, *ind_losses = cevae_loss(x_reconstructed, x, enc_t_pred, enc_yd_pred[:, 0], enc_yd_pred[:, 1], dec_t_pred, dec_yd_pred[:, 0], dec_yd_pred[:, 1], z_mu, z_logvar, gt_t, y[:,0] , y[:,1], criterion, lambdas, val_len=len)
         (enc_loss_y, enc_loss_d), (dec_loss_y, dec_loss_d), (enc_loss_t, dec_loss_t), (pred_loss, kl_loss, recon_loss) = ind_losses
@@ -262,8 +510,167 @@ def train(args, data, model, optimizer, criterion, epoch, warmup_iter=0, lamb=0.
         return loss_d.item(), loss_y.item(), batch_num, out, y, eval_loss_y, eval_loss_d, eval_model, (eval_loss_t1, eval_loss_t2), (pred_loss, kl_loss, recon_loss)
     else:
         # return 0, batch_num, out, y
+        import pdb; pdb.set_trace()
         raise ValueError("Loss raised nan.")
 
+
+
+def cevtransformer_lagging_loss(
+    model,
+    cont_p, cont_c, cat_p, cat_c, val_len, diff_days,
+    t, y, d,
+    criterion,
+    lambdas,
+    optimizer_enc,
+    optimizer_dec,
+    lagging_num=1,
+    t_loss=True
+):
+
+    sum_enc_y, sum_enc_d = 0.0, 0.0
+    for _ in range(lagging_num):
+        # a) zero grad φ
+        optimizer_enc.zero_grad()
+        # b) forward
+        x, x_recon, (enc_yd, enc_t), (dec_yd, dec_t), (z_mu, z_logvar) = \
+            model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+        enc_y_pred, enc_d_pred = enc_yd[:,0], enc_yd[:,1]
+        dec_y_pred, dec_d_pred = dec_yd[:,0], dec_yd[:,1]
+        # c) ELBO 
+        total_i, (e_y, e_d), _, _, _ = cevtransformer_loss(
+            x_recon, x,
+            enc_t, enc_y_pred, enc_d_pred,
+            dec_t, dec_y_pred, dec_d_pred,
+            z_mu, z_logvar,
+            t, y, d,
+            criterion,
+            lambdas
+        )
+        # d) backward & φ step
+        total_i.backward()
+        optimizer_enc.step()
+        # e) logging
+        sum_enc_y += e_y.item()
+        sum_enc_d += e_d.item()
+
+    avg_enc_losses = (sum_enc_y / lagging_num,
+                      sum_enc_d / lagging_num)
+
+    # --- 2) outer loop: θ  1 ---
+    optimizer_dec.zero_grad()
+    # a) fresh forward
+    x, x_recon, (enc_yd, enc_t), (dec_yd, dec_t), (z_mu, z_logvar) = \
+        model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+    enc_y_pred, enc_d_pred = enc_yd[:,0], enc_yd[:,1]
+    dec_y_pred, dec_d_pred = dec_yd[:,0], dec_yd[:,1]
+    # b) ELBO 
+    total, _, dec_losses, t_losses, misc_losses = cevtransformer_loss(
+        x_recon, x,
+        enc_t, enc_y_pred, enc_d_pred,
+        dec_t, dec_y_pred, dec_d_pred,
+        z_mu, z_logvar,
+        t, y, d,
+        criterion,
+        lambdas
+    )
+    # c) backward & θ step
+    total.backward()
+    optimizer_dec.step()
+
+    return total, avg_enc_losses, dec_losses, t_losses, misc_losses
+
+
+def train_with_lagging(args, data, model, criterion,
+                       epoch, warmup_iter=0, lamb=0.0, aux_criterion=None,
+                       use_treatment=False, eval_criterion=None, scaling="minmax",
+                       a_y=None, b_y=None, a_d=None, b_d=None,
+                       pred_model="enc", binary_t=False, lambdas=[1,1,1],
+                       optimizer_enc=None, optimizer_dec=None, lagging_num=1):
+    """
+    Train function with lagging support, preserving original return signature.
+
+    Returns:
+      loss_d, loss_y, batch_num, out, y,
+      eval_loss_y, eval_loss_d, eval_model,
+      (eval_loss_t1, eval_loss_t2), (pred_loss, kl_loss, recon_loss)
+    """
+    model.train()
+    # Unpack and forward
+    batch_num, cont_p, cont_c, cat_p, cat_c, val_len, y, diff_days, *t = data_load(data)
+    x, x_recon, (enc_yd_pred, enc_t_pred), (dec_yd_pred, dec_t_pred), (z_mu, z_logvar) = \
+        model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+
+    if use_treatment and args.model=='cevt':
+        # apply lagging via cevtransformer_loss
+        total, enc_losses, dec_losses, t_losses, misc_losses = cevtransformer_lagging_loss(
+            model,
+            cont_p, cont_c, cat_p, cat_c, val_len, diff_days,
+            t[0], y[:,0], y[:,1],
+            criterion, lambdas,
+            optimizer_enc, optimizer_dec, lagging_num,
+            t_loss=True
+        )
+        # unpack losses for logging and return
+        pred_loss, kl_loss, recon_loss = misc_losses
+        # for training return, use dec_losses and enc_losses for metrics
+        loss_y, loss_d = dec_losses[0], dec_losses[1]
+    else:
+        # fallback to original logic
+        if use_treatment:
+            # cevae or other models
+            total, enc_losses, dec_losses, t_losses, misc_losses = cevtransformer_lagging_loss(
+                model,
+                cont_p, cont_c, cat_p, cat_c, val_len, diff_days,
+                t[0], y[:,0], y[:,1],
+                criterion, lambdas,
+                optimizer_enc, optimizer_dec, lagging_num,
+                t_loss=True
+            )
+            pred_loss, kl_loss, recon_loss = misc_losses
+            loss_y, loss_d = dec_losses[0], dec_losses[1]
+        else:
+            loss_d = criterion(x[:,0], y[:,0])
+            loss_y = criterion(x[:,1], y[:,1])
+            total = loss_d+loss_y
+            pred_loss=kl_loss=recon_loss=None
+
+    
+    enc_pred_y, enc_pred_d, gt_y, gt_d = reverse_scaling(scaling, enc_yd_pred, y, a_y, b_y, a_d, b_d)
+    enc_eval_loss_y = eval_criterion(enc_pred_y, gt_y)
+    enc_eval_loss_d = eval_criterion(enc_pred_d, gt_d)
+    dec_pred_y, dec_pred_d, gt_y, gt_d = reverse_scaling(scaling, dec_yd_pred, y, a_y, b_y, a_d, b_d)
+    dec_eval_loss_y = eval_criterion(dec_pred_y, gt_y)
+    dec_eval_loss_d = eval_criterion(dec_pred_d, gt_d)
+    if enc_eval_loss_y + enc_eval_loss_d > dec_eval_loss_y + dec_eval_loss_d:
+        eval_loss_y, eval_loss_d = dec_eval_loss_y, dec_eval_loss_d
+        out = dec_yd_pred
+        loss_y = dec_losses[0]
+        loss_d = dec_losses[1]
+        dec_eval_loss_t1 = eval_criterion(dec_t_pred[:,0].squeeze(), t[0][:,0])
+        dec_eval_loss_t2 = eval_criterion(dec_t_pred[:,1].squeeze(), t[0][:,1])
+        eval_loss_t1 = dec_eval_loss_t1
+        eval_loss_t2 = dec_eval_loss_t2
+        eval_model = "Decoder"
+    else:
+        eval_loss_y, eval_loss_d = enc_eval_loss_y, enc_eval_loss_d
+        out = enc_yd_pred
+        loss_y = enc_losses[0]
+        loss_d = enc_losses[1]
+        enc_eval_loss_t1 = eval_criterion(enc_t_pred[:,0].squeeze(), t[0][:,0])
+        enc_eval_loss_t2 = eval_criterion(enc_t_pred[:,1].squeeze(), t[0][:,1])
+        eval_loss_t1 = enc_eval_loss_t1
+        eval_loss_t2 = enc_eval_loss_t2
+        eval_model = "Encoder"
+
+    # optimizer step if not already inside cevtransformer_loss
+    if not (optimizer_enc and optimizer_dec):
+        if lamb!=0.0:
+            total += lamb * torch.norm(model.linear1.weight, p=2)
+        total.backward()
+
+    # return original signature
+    return loss_d, loss_y, batch_num, out, y, eval_loss_y, eval_loss_d, eval_model, (eval_loss_t1, eval_loss_t2), (pred_loss, kl_loss, recon_loss)
+               
 ## Validation --------------------------------------------------------------------------------
 @torch.no_grad()
 def valid(args, data, model, eval_criterion, scaling, a_y, b_y, a_d, b_d, use_treatment=False, MC_sample=1):
@@ -460,9 +867,16 @@ def CE(args, model, dataloader, intervene_var):
         
         if args.use_treatment:
             if args.model == 'cevt':
-                (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                if args.is_synthetic:
+                    # x = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days).unsqueeze(1)
+                    (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                else:
+                    (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                 src_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
                 src_mask = model.generate_square_subsequent_mask(x.size(1)).cuda() if model.unidir else None
+                
+                # use original prediction with x2t_pred
+                # _, original_t, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len)
 
                 # use ground truth t instead of x2t_pred
                 original_t = gt_t[:,0].unsqueeze(1) if intervene_var == 't1' else gt_t[:,1].unsqueeze(1)
@@ -471,28 +885,34 @@ def CE(args, model, dataloader, intervene_var):
                 saved_original_t = original_t.clone()
                 saved_original_enc_yd = original_enc_yd.clone()
                 
-                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
                 for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                     original_t=saved_original_t.clone()
                     original_enc_yd=saved_original_enc_yd.clone()
                     
-                    
-                    if intervene_var == 't1':
-                        intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
-                    elif intervene_var == 't2':
-                        intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                        elif intervene_var == 't2':
+                            intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
                     
                     intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
                     _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=(intervene_var,intervene_t))
                     
                     delta_y = original_enc_yd - intervene_enc_yd
                     delta_t = (original_t - intervene_t)
-                    
-                    if intervene_var == 't1':
-                        delta_t = delta_t*6  # denormalize 
-                    elif intervene_var == 't2':
-                        delta_t = delta_t*8  # +3 denormalize
-                    
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
                         
                     delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
             
@@ -508,7 +928,177 @@ def CE(args, model, dataloader, intervene_var):
                 saved_original_t = original_t.clone()
                 saved_original_enc_yd = original_enc_yd.clone()
                 
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    original_t=saved_original_t.clone()
+                    original_enc_yd=saved_original_enc_yd.clone()
+                    
+                    if intervene_var == 't1':
+                        intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    elif intervene_var == 't2':
+                        intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+
+                    
+                    intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).cuda()
+                    _, _, intervene_enc_yd, _ = model.encoder(x, t_gt=intervene_t)
+                    
+                    delta_y = original_enc_yd - intervene_enc_yd
+                    if intervene_var == 't1':
+                        delta_t = (original_t - intervene_t)*6  # denormalize 
+                    elif intervene_var == 't2':
+                        delta_t = (original_t - intervene_t)*8  # +3 denormalize 
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+            
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+        else:
+            original_t = cont_c[:,:,0].clone() if intervene_var=='t1' else cont_c[:,:,1].clone()
+            if args.model == 'cevt':
+                _, _, (original_yd, _), (_, _), (_, _) = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            else:
+                original_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days, is_ce=True)
+            original_yd = torch.clamp(original_yd, 0, 1)
+            
+            if args.is_synthetic:       
+                intervene_t_value_range = range(0, 11)
+            else:
                 intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+            for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                
+                if intervene_var == 't1':
+                    intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    cont_c[:,:,0] = intervene_t_value 
+                elif intervene_var == 't2':
+                    intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,1] = intervene_t_value 
+        
+                intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                
+                # for fair comaparison
+                intervene_yd = torch.clamp(intervene_yd, 0, 1)
+                
+                delta_y = original_yd - intervene_yd
+                # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                if intervene_var == 't1':
+                    delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                elif intervene_var == 't2':
+                    delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
+                
+                delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+        
+                for i in range(delta_y.size(0)):
+                    data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                    data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+    
+    def calculate_gradients_and_effect(data_points, method='coef'):
+        del_t = data_points[:, 0]  # delta_t
+        del_var = data_points[:, 1]  # delta_y or delta_d
+
+        non_zero_indices = del_t != 0
+        del_t = del_t[non_zero_indices]
+        del_var = del_var[non_zero_indices]
+        
+        gradients = del_var / del_t
+        negative_acc = np.sum(gradients < 0) / len(gradients)
+        
+        if method == 'grad':
+            model = LinearRegression()
+            model.fit(del_t.reshape(-1, 1), del_var)
+            treatment_effect = model.coef_[0]
+        elif method == 'mean':
+            treatment_effect = np.mean(gradients)
+            
+        return negative_acc, treatment_effect
+
+    negative_acc_y, ce_y = calculate_gradients_and_effect(np.array(data_points_y), method = 'mean')
+    negative_acc_d, ce_d = calculate_gradients_and_effect(np.array(data_points_d), method = 'mean')
+    
+    print(f"CE y : {ce_y:.3f}, CE d : {ce_d:.3f}")
+    print(f"CACC y : {negative_acc_y:.3f}, CACC d : {negative_acc_d:.3f}")
+
+    return negative_acc_y, negative_acc_d, ce_y, ce_d
+
+
+@torch.no_grad()
+def CE_worstcase(args, model, dataloader, intervene_var):
+    model.eval()  
+    data_points_y = []; data_points_d=[]
+    
+    for data in dataloader:
+        _, cont_p, cont_c, cat_p, cat_c, val_len, y, diff_days, *rest = data_load(data)
+        gt_t = rest[0]
+        
+        if args.use_treatment:
+            if args.model == 'cevt':
+                if args.is_synthetic:
+                    # x = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days).unsqueeze(1)
+                    (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                else:
+                    (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                src_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
+                src_mask = model.generate_square_subsequent_mask(x.size(1)).cuda() if model.unidir else None
+                
+                # use original prediction with x2t_pred
+                # _, original_t, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len)
+
+                # use ground truth t instead of x2t_pred
+                original_t = gt_t[:,0].unsqueeze(1) if intervene_var == 't1' else gt_t[:,1].unsqueeze(1)
+                _, _, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=(intervene_var,original_t))
+                
+                saved_original_t = original_t.clone()
+                saved_original_enc_yd = original_enc_yd.clone()
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    original_t=saved_original_t.clone()
+                    original_enc_yd=saved_original_enc_yd.clone()
+                    
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                        elif intervene_var == 't2':
+                            intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    
+                    intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
+                    _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=(intervene_var,intervene_t))
+                    
+                    delta_y = original_enc_yd - intervene_enc_yd
+                    delta_t = (original_t - intervene_t)
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
+                        
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+            
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+            if args.model == 'cevae': 
+                x = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+
+                original_t = gt_t
+                _, _, original_enc_yd, _ = model.encoder(x, t_gt=original_t)
+                
+                saved_original_t = original_t.clone()
+                saved_original_enc_yd = original_enc_yd.clone()
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
                 for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                     original_t=saved_original_t.clone()
                     original_enc_yd=saved_original_enc_yd.clone()
@@ -540,7 +1130,10 @@ def CE(args, model, dataloader, intervene_var):
                 original_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
             original_yd = torch.clamp(original_yd, 0, 1)
             
-            intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+            if args.is_synthetic:       
+                intervene_t_value_range = range(0, 11)
+            else:
+                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
             for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                 
                 if intervene_var == 't1':
@@ -550,7 +1143,6 @@ def CE(args, model, dataloader, intervene_var):
                     intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
                     cont_c[:,:,1] = intervene_t_value 
         
-                 
                 intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                 
                 # for fair comaparison
@@ -563,7 +1155,7 @@ def CE(args, model, dataloader, intervene_var):
                 elif intervene_var == 't2':
                     delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
                 
-                delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+                delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.a_y, dataloader.dataset.b_y, dataloader.dataset.a_d, dataloader.dataset.b_d)
         
                 for i in range(delta_y.size(0)):
                     data_points_y.append((delta_t[i].item(), delta_y[i].item()))
@@ -571,17 +1163,21 @@ def CE(args, model, dataloader, intervene_var):
     
     def calculate_gradients_and_effect(data_points, method='coef'):
         del_t = data_points[:, 0]  # delta_t
-        del_var = data_points[:, 1]   # delta_y or delta_d
+        del_var = data_points[:, 1]  # delta_y or delta_d
 
         non_zero_indices = del_t != 0
         del_t = del_t[non_zero_indices]
         del_var = del_var[non_zero_indices]
         
-         
         gradients = del_var / del_t
         negative_acc = np.sum(gradients < 0) / len(gradients)
         
-        treatment_effect = np.mean(gradients)
+        if method == 'grad':
+            model = LinearRegression()
+            model.fit(del_t.reshape(-1, 1), del_var)
+            treatment_effect = model.coef_[0]
+        elif method == 'mean':
+            treatment_effect = np.mean(gradients)
             
         return negative_acc, treatment_effect
 
@@ -592,7 +1188,7 @@ def CE(args, model, dataloader, intervene_var):
     print(f"CACC y : {negative_acc_y:.3f}, CACC d : {negative_acc_d:.3f}")
 
     return negative_acc_y, negative_acc_d, ce_y, ce_d
-
+    
 
 def data_load(data):
     # Move all tensors in the data tuple to GPU at once
@@ -642,7 +1238,7 @@ def save_checkpoint(file_path, epoch, **kwargs):
     state.update(kwargs)
     torch.save(state, file_path)
 
-def data_split_num(dataset, tr=0.8, val=0.1, te=0.1):
+def data_split_num(dataset, tr=0.6, val=0.2, te=0.2):
     train_length = int(tr * len(dataset))
     val_length = int(val * len(dataset))
     test_length = len(dataset) - train_length - val_length
@@ -666,10 +1262,8 @@ def reduction_cluster(x, diff_days, len, reduction):
         pad_tensor = torch.zeros([5,x.shape[-1]]).cuda()
         m = len[i].item()
         non_padded_cluster = x[i, :m, :]  
-        ## Cluster-wise average ##
         if reduction == "mean":
             non_padded_cluster = torch.mean(non_padded_cluster, dim=0)
-        ## Date-wise average ##
         elif reduction == "date":
             non_padded_days = diff_days[i, :m, :]
             non_padded_cluster, new_len = patient_seq_to_date_seq(non_padded_cluster, non_padded_days)
@@ -726,11 +1320,76 @@ def reparametrize(mu, logvar):
     z = mu + epsilon * std
     return z
 
+# def cevae_loss_function(x_reconstructed, x, enc_preds, dec_preds, z_mu, z_logvar, y, t, aux_criterion):
+
+#     # Loss = logp(x,t∣z) + logp(y∣t,z) + logp(d∣t,z) + logp(z) − logq(z∣x,t,y,d) + logq(t=t∗∣x∗) + logq(y=y∗∣x∗,t∗) + logq(d=d∗∣x∗,t∗)
+
+#     # Reconstruction loss for x
+#     recon_loss = F.mse_loss(x_reconstructed, x)
+
+#     # Predictive loss for observed data
+#     enc_yd_pred, enc_t_pred = enc_preds
+#     dec_t_pred, dec_yd_pred = dec_preds
+
+#     pred_loss_y = F.mse_loss(enc_yd_pred[:, 1], y[:, 1])   # or use any appropriate loss
+#     pred_loss_d = F.mse_loss(enc_yd_pred[:, 0], y[:, 0])   # or use any appropriate loss
+
+#     # Use cross-entropy for categorical prediction of t
+#     pred_loss_t_enc = aux_criterion(enc_t_pred, t.long())
+#     pred_loss_t_dec = aux_criterion(dec_t_pred, t.long())
+
+#     # KL divergence
+#     kl_loss = -0.5 * torch.sum(1 + z_logvar - z_mu.pow(2) - z_logvar.exp())
+
+#     # Combining the terms based on the provided formula
+#     total_loss = recon_loss + pred_loss_y + pred_loss_d + kl_loss + pred_loss_t_enc + pred_loss_t_dec
+
+#     return total_loss
+
+# def cevae_loss_function(x_reconstructed, x, enc_t_pred, enc_y_pred, enc_d_pred, dec_t_pred, dec_y_pred, dec_d_pred, z_mu, z_logvar, t, y , d, warm_yd, criterion, aux_criterion, binary_t): 
+#     # 0. Warmup Loss
+#     warmup_loss_y = criterion(warm_yd[:,0], y)  
+#     warmup_loss_d = criterion(warm_yd[:,1], d)  
+#     warmup_loss = warmup_loss_y + warmup_loss_d
+#     # 1. Reconstruction Loss
+#     ## mse method
+#     recon_loss_x = F.mse_loss(x_reconstructed, x)
+#     recon_loss_t = criterion(dec_t_pred, t)
+#     recon_loss_y = criterion(dec_y_pred, y)
+#     recon_loss_d = criterion(dec_d_pred, d)
+#     ## log prob method
+#     # x_dist = torch.distributions.Normal(x_reconstructed, torch.exp(0.5 * torch.ones_like(x_reconstructed)))
+#     # t_dist = torch.distributions.Categorical(logits=dec_t_pred)
+#     # y_dist = torch.distributions.Normal(dec_y_pred, torch.exp(0.5 * torch.ones_like(dec_y_pred)))
+#     # d_dist = torch.distributions.Normal(dec_d_pred, torch.exp(0.5 * torch.ones_like(dec_d_pred)))
+    
+#     # recon_loss_x = -x_dist.log_prob(x).sum()
+#     # recon_loss_t = -t_dist.log_prob(t.long()).sum() if binary_t else -t_dist.log_prob((t * 6).long()).sum()
+#     # recon_loss_y = -y_dist.log_prob(y).sum()
+#     # recon_loss_d = -d_dist.log_prob(d).sum()
+    
+#     recon_loss = recon_loss_x + recon_loss_t + recon_loss_y + recon_loss_d
+
+#     # 2. KL Divergence
+#     kl_loss = -0.5 * torch.sum(1 + z_logvar - z_mu.pow(2) - z_logvar.exp())
+
+#     # 3. Auxiliary Loss (Using the predicted values t*, y*, and d*)
+#     # aux_loss_t = aux_criterion(enc_t_pred, t.long()) if binary_t else aux_criterion(enc_t_pred, (t * 6).long())  
+#     aux_loss_t = criterion(enc_t_pred, t) 
+#     aux_loss_y = criterion(enc_y_pred, y)  
+#     aux_loss_d = criterion(enc_d_pred, d)  
+#     aux_loss = aux_loss_t + aux_loss_y + aux_loss_d
+#     # Combine the losses
+#     total_loss = recon_loss + kl_loss + aux_loss
+#     if torch.isnan(total_loss):
+#         import pdb;pdb.set_trace()
+#     return total_loss, (warmup_loss_y, warmup_loss_d), (aux_loss_y, aux_loss_d), (recon_loss_y, recon_loss_d)
+
 def nan_filtered_loss(pred, target, criterion):
     valid_indices = torch.where(~torch.isnan(pred))[0]
     return criterion(pred[valid_indices], target[valid_indices])
 
-def cevt_loss(x_reconstructed, x,   
+def cevtransformer_loss(x_reconstructed, x,   
             enc_t_pred, enc_y_pred, enc_d_pred,
             dec_t_pred, dec_y_pred, dec_d_pred,
             z_mu, z_logvar,
@@ -767,14 +1426,21 @@ def cevt_loss(x_reconstructed, x,
     pred_loss = enc_loss + dec_loss
     
     # KLD loss
-    kl_loss = -0.5 * torch.sum(1 + z_logvar - z_mu.pow(2) - z_logvar.exp())
+    # kl_loss = -0.5 * torch.sum(1 + z_logvar - z_mu.pow(2) - z_logvar.exp())
+    
+    # KL loss with Free Bits
+    kl_per_dim = -0.5 * (1 + z_logvar - z_mu.pow(2) - z_logvar.exp())
+    free_bits_tau = 0.1
+    kl_per_dim = torch.clamp(kl_per_dim, min=free_bits_tau)
+    kl_loss = kl_per_dim.sum(dim=1).mean()
+
 
     # Reconstruction Loss
     recon_loss = criterion(x_reconstructed, x)
 
     # # Reconstruction Loss
-    # recon_loss = nan_filtered_loss(x_reconstructed, x, criterion)
     total_loss = lambdas[0]*pred_loss + lambdas[1]*kl_loss + lambdas[2]*recon_loss
+    
     # total_loss = lambdas[0]*enc_y_loss + lambdas[1]*enc_d_loss #+ lambdas[2]*recon_loss
     return total_loss, (enc_y_loss, enc_d_loss), (dec_y_loss, dec_d_loss), ((enc_t1_loss, enc_t2_loss), (dec_t1_loss, dec_t2_loss)), (pred_loss, kl_loss, recon_loss)
 
@@ -819,6 +1485,21 @@ def cevae_loss(x_reconstructed, x,
 
     # Reconstruction Loss
     recon_loss = criterion(x_reconstructed, x)
+    
+    # Encoder Prediction Loss
+    # enc_y_loss = nan_filtered_loss(enc_y_pred, y, criterion)
+    # enc_d_loss = nan_filtered_loss(enc_d_pred, d, criterion)
+    # enc_t_loss = nan_filtered_loss(enc_t_pred, t, criterion)
+    # enc_loss = enc_y_loss + enc_d_loss + enc_t_loss
+
+    # # Decoder Prediction Loss
+    # dec_y_loss = nan_filtered_loss(dec_y_pred, y, criterion)
+    # dec_d_loss = nan_filtered_loss(dec_d_pred, d, criterion)
+    # dec_t_loss = nan_filtered_loss(dec_t_pred, t, criterion)
+    # dec_loss = dec_y_loss + dec_d_loss + dec_t_loss
+
+    # # Reconstruction Loss
+    # recon_loss = nan_filtered_loss(x_reconstructed, x, criterion)
 
     total_loss = lambdas[0]*pred_loss + lambdas[1]*kl_loss + lambdas[2]*recon_loss
     # total_loss = lambdas[0]*enc_y_loss + lambdas[1]*enc_d_loss #+ lambdas[2]*recon_loss
@@ -939,8 +1620,10 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                 saved_original_t = original_t.clone()
                 saved_original_enc_yd = original_enc_yd.clone()
                 
-                
-                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
                 for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                     original_t=saved_original_t.clone()
                     original_enc_yd=saved_original_enc_yd.clone()
@@ -952,18 +1635,21 @@ def iTrans_CE(args, model, dataloader, intervene_var):
 
                     
                     intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
-                    
                     _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=("t1",intervene_t))
                     
                         
                     delta_y = original_enc_yd - intervene_enc_yd
                     delta_t = (original_t - intervene_t)
                     # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
-                    
-                    if intervene_var == 't1':
-                        delta_t = delta_t*6  # denormalize 
-                    elif intervene_var == 't2':
-                        delta_t = delta_t*8  # +3 denormalize
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
                     for i in range(delta_y.size(0)):
                         data_points_y.append((delta_t[i].item(), delta_y[i].item()))
                         data_points_d.append((delta_t[i].item(), delta_d[i].item()))
@@ -986,7 +1672,10 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                 saved_original_t = original_t.clone()
                 saved_original_yd_pred = original_yd_pred.clone()
                 
-                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
                 for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                     
                     # for 't2'
@@ -1011,11 +1700,15 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                     # delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize      
                     delta_t = (original_t[:,0] - intervene_t_value)
                     # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
-                
-                    if intervene_var == 't1':
-                        delta_t = delta_t*6  # denormalize 
-                    elif intervene_var == 't2':
-                        delta_t = delta_t*8  # +3 denormalize
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min          
                     delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
 
                     for i in range(delta_y.size(0)):
@@ -1028,13 +1721,14 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                 original_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                 original_yd = torch.clamp(original_yd, 0, 1)
                 
-                
-                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
                 for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                     intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
                     cont_c[:,:,0] = intervene_t_value 
             
-                     
                     intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                     intervene_yd = torch.clamp(intervene_yd, 0, 1)
                     
@@ -1042,12 +1736,15 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                     # delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
                     delta_t = (original_t[:,0] - intervene_t_value)
                     # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
-                    
-                    if intervene_var == 't1':
-                        delta_t = delta_t*6  # denormalize 
-                    elif intervene_var == 't2':
-                        delta_t = delta_t*8  # +3 denormalize
-                    
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
                     
                     delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
             
@@ -1064,7 +1761,10 @@ def iTrans_CE(args, model, dataloader, intervene_var):
             
             original_yd = torch.clamp(original_yd, 0, 1)
             
-            intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+            if args.is_synthetic:
+                intervene_t_value_range = range(0, 11)
+            else:
+                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
             for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
                 
                 if intervene_var == 't1':
@@ -1074,7 +1774,6 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                     intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
                     cont_c[:,:,1] = intervene_t_value 
         
-                 
                 intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
                 
                 # for fair comaparison
@@ -1082,10 +1781,15 @@ def iTrans_CE(args, model, dataloader, intervene_var):
                 
                 delta_y = original_yd - intervene_yd               
                 delta_t = (original_t[:,0] - intervene_t_value)
-                if intervene_var == 't1':
-                    delta_t = delta_t*6  # denormalize 
-                elif intervene_var == 't2':
-                    delta_t = delta_t*8  # +3 denormalize 
+                if not args.is_synthetic:
+                    if intervene_var == 't1':
+                        delta_t = delta_t*6  # denormalize 
+                    elif intervene_var == 't2':
+                        delta_t = delta_t*8  # +3 denormalize
+                else:
+                    t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                    t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                    delta_t = delta_t * (t_max - t_min) + t_min 
                 
                 delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
         
@@ -1095,17 +1799,21 @@ def iTrans_CE(args, model, dataloader, intervene_var):
     
     def iTrans_calculate_gradients_and_effect(data_points, method='coef'):
         del_t = data_points[:, 0]  # delta_t
-        del_var = data_points[:, 1]   # delta_y or delta_d
+        del_var = data_points[:, 1]  # delta_y / delta_d
 
         non_zero_indices = del_t != 0
         del_t = del_t[non_zero_indices]
         del_var = del_var[non_zero_indices]
         
-         
         gradients = del_var / del_t
         negative_acc = np.sum(gradients < 0) / len(gradients)
         
-        treatment_effect = np.mean(gradients)
+        if method == 'grad':
+            model = LinearRegression()
+            model.fit(del_t.reshape(-1, 1), del_var)
+            treatment_effect = model.coef_[0]
+        elif method == 'mean':
+            treatment_effect = np.mean(gradients)
             
         return negative_acc, treatment_effect
 
@@ -1117,6 +1825,193 @@ def iTrans_CE(args, model, dataloader, intervene_var):
 
     return negative_acc_y, negative_acc_d, ce_y, ce_d
     
+def iTrans_PEHE(args, model, dataloader, intervene_var):
+    model.eval()  
+    data_points_y = []; data_points_d=[]
+    
+    for data in dataloader:
+        _, cont_p, cont_c, cat_p, cat_c, val_len, y, diff_days, *rest = data_load(data)
+        gt_t = rest[0]
+        
+        if args.use_treatment:        
+            if args.model in ['tarnet', 'dragonnet']:
+                original_t = cont_c[:,:,0].clone()
+                
+                yd0_pred, yd1_pred, yd2_pred, yd3_pred, yd4_pred, yd5_pred, yd6_pred, t_pred, epsilons = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                t_pred = F.softmax(t_pred, dim=-1).argmax(dim=1).to(int)
+                mask_t0 = torch.zeros_like(t_pred); mask_t0[t_pred == 0] = True; mask_t0 = mask_t0.unsqueeze(1).expand(-1, 2)
+                mask_t1 = torch.zeros_like(t_pred); mask_t1[t_pred == 1] = True; mask_t1 = mask_t1.unsqueeze(1).expand(-1, 2)
+                mask_t2 = torch.zeros_like(t_pred); mask_t2[t_pred == 2] = True; mask_t2 = mask_t2.unsqueeze(1).expand(-1, 2)
+                mask_t3 = torch.zeros_like(t_pred); mask_t3[t_pred == 3] = True; mask_t3 = mask_t3.unsqueeze(1).expand(-1, 2)
+                mask_t4 = torch.zeros_like(t_pred); mask_t4[t_pred == 4] = True; mask_t4 = mask_t4.unsqueeze(1).expand(-1, 2)
+                mask_t5 = torch.zeros_like(t_pred); mask_t5[t_pred == 5] = True; mask_t5 = mask_t5.unsqueeze(1).expand(-1, 2)
+                mask_t6 = torch.zeros_like(t_pred); mask_t6[t_pred == 6] = True; mask_t6 = mask_t6.unsqueeze(1).expand(-1, 2)
+                original_yd_pred = mask_t0 * yd0_pred + mask_t1 * yd1_pred + mask_t2 * yd2_pred + mask_t3 * yd3_pred + mask_t4 * yd4_pred + mask_t5 * yd5_pred + mask_t6 * yd6_pred
+                original_yd_pred = torch.clamp(original_yd_pred, 0, 1)
+                
+                saved_original_t = original_t.clone()
+                saved_original_yd_pred = original_yd_pred.clone()
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    
+                    # for 't2'
+                    intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,0] = intervene_t_value 
+                    
+                    yd0_pred, yd1_pred, yd2_pred, yd3_pred, yd4_pred, yd5_pred, yd6_pred, t_pred, epsilons = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                    t_pred = F.softmax(t_pred, dim=-1).argmax(dim=1).to(int)
+                    mask_t0 = torch.zeros_like(t_pred); mask_t0[t_pred == 0] = True; mask_t0 = mask_t0.unsqueeze(1).expand(-1, 2)
+                    mask_t1 = torch.zeros_like(t_pred); mask_t1[t_pred == 1] = True; mask_t1 = mask_t1.unsqueeze(1).expand(-1, 2)
+                    mask_t2 = torch.zeros_like(t_pred); mask_t2[t_pred == 2] = True; mask_t2 = mask_t2.unsqueeze(1).expand(-1, 2)
+                    mask_t3 = torch.zeros_like(t_pred); mask_t3[t_pred == 3] = True; mask_t3 = mask_t3.unsqueeze(1).expand(-1, 2)
+                    mask_t4 = torch.zeros_like(t_pred); mask_t4[t_pred == 4] = True; mask_t4 = mask_t4.unsqueeze(1).expand(-1, 2)
+                    mask_t5 = torch.zeros_like(t_pred); mask_t5[t_pred == 5] = True; mask_t5 = mask_t5.unsqueeze(1).expand(-1, 2)
+                    mask_t6 = torch.zeros_like(t_pred); mask_t6[t_pred == 6] = True; mask_t6 = mask_t6.unsqueeze(1).expand(-1, 2)
+                    intervene_yd_pred = mask_t0 * yd0_pred + mask_t1 * yd1_pred + mask_t2 * yd2_pred + mask_t3 * yd3_pred + mask_t4 * yd4_pred + mask_t5 * yd5_pred + mask_t6 * yd6_pred
+                        
+                    # for fair comaparison
+                    intervene_yd_pred = torch.clamp(intervene_yd_pred, 0, 1)
+                    
+                    delta_y = original_yd_pred - intervene_yd_pred
+                    delta_t = (original_t[:,0] - intervene_t_value)
+                    # delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
+                    # delta_t = (original_t - intervene_t)
+                    # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min              
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+                        
+                        
+            elif args.model=='iTransformer':
+                original_t = cont_c[:,:,0].clone()
+                original_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                original_yd = torch.clamp(original_yd, 0, 1)
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,0] = intervene_t_value 
+            
+                    intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                    intervene_yd = torch.clamp(intervene_yd, 0, 1)
+                    
+                    delta_y = original_yd - intervene_yd
+                    # delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
+                    delta_t = (original_t[:,0] - intervene_t_value)
+                    # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+            
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+                
+        else:
+            original_t = cont_c[:,:,0].clone() if intervene_var=='t1' else cont_c[:,:,1].clone()
+            if args.model == 'cevt':
+                _, _, (original_yd, _), (_, _), (_, _) = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            else:
+                original_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            
+            original_yd = torch.clamp(original_yd, 0, 1)
+            
+            if args.is_synthetic:
+                intervene_t_value_range = range(0, 11)
+            else:
+                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+            for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                
+                if intervene_var == 't1':
+                    intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    cont_c[:,:,0] = intervene_t_value 
+                elif intervene_var == 't2':
+                    intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,1] = intervene_t_value 
+         
+                intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                
+                # for fair comaparison
+                intervene_yd = torch.clamp(intervene_yd, 0, 1)
+                
+                delta_y = original_yd - intervene_yd
+                delta_t = (original_t[:,0] - intervene_t_value)
+                # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                if not args.is_synthetic:
+                    if intervene_var == 't1':
+                        delta_t = delta_t*6  # denormalize 
+                    elif intervene_var == 't2':
+                        delta_t = delta_t*8  # +3 denormalize
+                else:
+                    t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                    t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                    delta_t = delta_t * (t_max - t_min) + t_min
+                # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                # if intervene_var == 't1':
+                #     delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                # elif intervene_var == 't2':
+                #     delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
+                
+                delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+        
+                for i in range(delta_y.size(0)):
+                    data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                    data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+    def calculate_gradients_and_effect(data_points, method='coef', pehe=True):
+        del_t = data_points[:, 0]  # delta_t
+        del_var = data_points[:, 1]  # delta_y / delta_d
+
+        non_zero_indices = del_t != 0
+        del_t = del_t[non_zero_indices]
+        del_var = del_var[non_zero_indices]
+        
+        true_ite = 1.789
+        if not pehe:
+            gradients = abs((del_var / del_t) - true_ite)#**2
+        else:
+            gradients = ((del_var / del_t) - true_ite)**2
+        
+        if method == 'grad':
+            model = LinearRegression()
+            model.fit(del_t.reshape(-1, 1), del_var)
+            treatment_effect = model.coef_[0]
+        elif method == 'mean':
+            treatment_effect = np.mean(gradients)
+            
+        return treatment_effect
+
+    ate_y = calculate_gradients_and_effect(np.array(data_points_y), method = 'mean', pehe=False)
+    pehe_y = math.sqrt(calculate_gradients_and_effect(np.array(data_points_y), method = 'mean', pehe=True))
+    # pehe_d = calculate_gradients_and_effect(np.array(data_points_d), method = 'mean')
+    
+    print(f"P error HE y : {pehe_y:.3f}, ATE error y : {ate_y:.3f}")
+
+    return pehe_y, ate_y
 
 ##############################################################
 ## DragonNet, TarNet
@@ -1235,4 +2130,269 @@ def test_causal_model(args, data, model, scaling, a_y, b_y, a_d, b_d):
         return mae_d.item(), mae_y.item(), rmse_d.item(), rmse_y.item(), t_loss.item(), batch_num, yd_pred, yd_true
     else:
         return 0, batch_num, yd_pred, yd_true
-  
+    
+@torch.no_grad()
+def PEHE(args, model, dataloader, intervene_var='t2'):
+    model.eval()  
+    data_points_y = []; data_points_d=[]
+    
+    for data in dataloader:
+        _, cont_p, cont_c, cat_p, cat_c, val_len, y, diff_days, *rest = data_load(data)
+        gt_t = rest[0]
+        
+        if args.use_treatment:
+            if args.model == 'cevt':
+                (x, diff_days, _), _ = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                src_key_padding_mask = ~(torch.arange(x.size(1)).expand(x.size(0), -1).cuda() < val_len.unsqueeze(1)).cuda()
+                src_mask = model.generate_square_subsequent_mask(x.size(1)).cuda() if model.unidir else None
+
+                # use ground truth t instead of x2t_pred
+                original_t = gt_t[:,0].unsqueeze(1) if intervene_var == 't1' else gt_t[:,1].unsqueeze(1)
+                _, _, original_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=(intervene_var,original_t))
+                
+                saved_original_t = original_t.clone()
+                saved_original_enc_yd = original_enc_yd.clone()
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    original_t=saved_original_t.clone()
+                    original_enc_yd=saved_original_enc_yd.clone()
+                    
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                        elif intervene_var == 't2':
+                            intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    
+                    intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).unsqueeze(1).cuda()
+                    _, _, intervene_enc_yd = model.transformer_encoder(x, mask=src_mask, src_key_padding_mask=src_key_padding_mask, val_len=val_len, intervene_t=(intervene_var,intervene_t))
+                        
+                    delta_y = original_enc_yd - intervene_enc_yd
+                    delta_t = (original_t - intervene_t)
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
+                        
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+            
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+            elif args.model == 'cevae': 
+                x = model.embedding(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+
+                original_t = gt_t
+                _, _, original_enc_yd, _ = model.encoder(x, t_gt=original_t)
+                
+                saved_original_t = original_t.clone()
+                saved_original_enc_yd = original_enc_yd.clone()
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    original_t=saved_original_t.clone()
+                    original_enc_yd=saved_original_enc_yd.clone()
+                    
+                    if intervene_var == 't1':
+                        intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    elif intervene_var == 't2':
+                        intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+
+                    intervene_t = torch.full((x.size(0),), intervene_t_value, dtype=torch.float).cuda()
+                    _, _, intervene_enc_yd, _ = model.encoder(x, t_gt=intervene_t)
+                    
+                    delta_y = original_enc_yd - intervene_enc_yd
+                    delta_t = (original_t - intervene_t)
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+            
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+            if args.model in ['tarnet', 'dragonnet']:
+                original_t = cont_c[:,:,0].clone()
+                
+                yd0_pred, yd1_pred, yd2_pred, yd3_pred, yd4_pred, yd5_pred, yd6_pred, t_pred, epsilons = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                t_pred = F.softmax(t_pred, dim=-1).argmax(dim=1).to(int)
+                mask_t0 = torch.zeros_like(t_pred); mask_t0[t_pred == 0] = True; mask_t0 = mask_t0.unsqueeze(1).expand(-1, 2)
+                mask_t1 = torch.zeros_like(t_pred); mask_t1[t_pred == 1] = True; mask_t1 = mask_t1.unsqueeze(1).expand(-1, 2)
+                mask_t2 = torch.zeros_like(t_pred); mask_t2[t_pred == 2] = True; mask_t2 = mask_t2.unsqueeze(1).expand(-1, 2)
+                mask_t3 = torch.zeros_like(t_pred); mask_t3[t_pred == 3] = True; mask_t3 = mask_t3.unsqueeze(1).expand(-1, 2)
+                mask_t4 = torch.zeros_like(t_pred); mask_t4[t_pred == 4] = True; mask_t4 = mask_t4.unsqueeze(1).expand(-1, 2)
+                mask_t5 = torch.zeros_like(t_pred); mask_t5[t_pred == 5] = True; mask_t5 = mask_t5.unsqueeze(1).expand(-1, 2)
+                mask_t6 = torch.zeros_like(t_pred); mask_t6[t_pred == 6] = True; mask_t6 = mask_t6.unsqueeze(1).expand(-1, 2)
+                original_yd_pred = mask_t0 * yd0_pred + mask_t1 * yd1_pred + mask_t2 * yd2_pred + mask_t3 * yd3_pred + mask_t4 * yd4_pred + mask_t5 * yd5_pred + mask_t6 * yd6_pred
+                original_yd_pred = torch.clamp(original_yd_pred, 0, 1)
+                
+                saved_original_t = original_t.clone()
+                saved_original_yd_pred = original_yd_pred.clone()
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    
+                    if not args.is_synthetic:
+                        # for 't2'
+                        intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,0] = intervene_t_value 
+                    
+                    yd0_pred, yd1_pred, yd2_pred, yd3_pred, yd4_pred, yd5_pred, yd6_pred, t_pred, epsilons = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                    t_pred = F.softmax(t_pred, dim=-1).argmax(dim=1).to(int)
+                    mask_t0 = torch.zeros_like(t_pred); mask_t0[t_pred == 0] = True; mask_t0 = mask_t0.unsqueeze(1).expand(-1, 2)
+                    mask_t1 = torch.zeros_like(t_pred); mask_t1[t_pred == 1] = True; mask_t1 = mask_t1.unsqueeze(1).expand(-1, 2)
+                    mask_t2 = torch.zeros_like(t_pred); mask_t2[t_pred == 2] = True; mask_t2 = mask_t2.unsqueeze(1).expand(-1, 2)
+                    mask_t3 = torch.zeros_like(t_pred); mask_t3[t_pred == 3] = True; mask_t3 = mask_t3.unsqueeze(1).expand(-1, 2)
+                    mask_t4 = torch.zeros_like(t_pred); mask_t4[t_pred == 4] = True; mask_t4 = mask_t4.unsqueeze(1).expand(-1, 2)
+                    mask_t5 = torch.zeros_like(t_pred); mask_t5[t_pred == 5] = True; mask_t5 = mask_t5.unsqueeze(1).expand(-1, 2)
+                    mask_t6 = torch.zeros_like(t_pred); mask_t6[t_pred == 6] = True; mask_t6 = mask_t6.unsqueeze(1).expand(-1, 2)
+                    intervene_yd_pred = mask_t0 * yd0_pred + mask_t1 * yd1_pred + mask_t2 * yd2_pred + mask_t3 * yd3_pred + mask_t4 * yd4_pred + mask_t5 * yd5_pred + mask_t6 * yd6_pred
+                        
+                    # for fair comaparison
+                    intervene_yd_pred = torch.clamp(intervene_yd_pred, 0, 1)
+                    
+                    delta_y = original_yd_pred - intervene_yd_pred
+                    delta_t = (original_t[:,0] - intervene_t_value)
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        delta_t = delta_t * (t_max - t_min) + t_min              
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+                    
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+            elif args.model=='iTransformer':
+                original_t = cont_c[:,:,0].clone()
+                original_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                original_yd = torch.clamp(original_yd, 0, 1)
+                
+                if args.is_synthetic:
+                    intervene_t_value_range = range(0, 11)
+                else:
+                    intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+                for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                    intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,0] = intervene_t_value 
+            
+                    intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                    intervene_yd = torch.clamp(intervene_yd, 0, 1)
+                    
+                    delta_y = original_yd - intervene_yd
+                    # delta_t = (original_t[:,0] - intervene_t_value)*8  # +3 denormalize  
+                    delta_t = (original_t[:,0] - intervene_t_value)
+                    # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                    if not args.is_synthetic:
+                        if intervene_var == 't1':
+                            delta_t = delta_t*6  # denormalize 
+                        elif intervene_var == 't2':
+                            delta_t = delta_t*8  # +3 denormalize
+                    else:
+                        t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                        t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                        
+                        delta_t = delta_t * (t_max - t_min) + t_min
+                    delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+            
+                    for i in range(delta_y.size(0)):
+                        data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                        data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+        else:
+            original_t = cont_c[:,:,0].clone() if intervene_var=='t1' else cont_c[:,:,1].clone()
+            if args.model == 'cevt':
+                _, _, (original_yd, _), (_, _), (_, _) = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            else:
+                original_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+            original_yd = torch.clamp(original_yd, 0, 1)
+            
+            if args.is_synthetic:       
+                intervene_t_value_range = range(0, 11)
+            else:
+                intervene_t_value_range = range(0, 61) if intervene_var == 't1' else range(30, 111)
+            for intervene_t_value in [x * 0.1 for x in intervene_t_value_range]:
+                
+                if intervene_var == 't1':
+                    intervene_t_value = intervene_t_value / 6  # t1 norm [0, 6]
+                    cont_c[:,:,0] = intervene_t_value 
+                elif intervene_var == 't2':
+                    intervene_t_value = (intervene_t_value - 3) / 8  # t2 norm [3, 11] 
+                    cont_c[:,:,1] = intervene_t_value 
+        
+                intervene_yd = model(cont_p, cont_c, cat_p, cat_c, val_len, diff_days)
+                
+                # for fair comaparison
+                intervene_yd = torch.clamp(intervene_yd, 0, 1)
+                
+                delta_y = original_yd - intervene_yd
+                delta_t = (original_t[:,0] - intervene_t_value)
+                # delta_t = (original_t[:,0] - intervene_t_value)*6  # denormalize 
+                if not args.is_synthetic:
+                    if intervene_var == 't1':
+                        delta_t = delta_t*6  # denormalize 
+                    elif intervene_var == 't2':
+                        delta_t = delta_t*8  # +3 denormalize
+                else:
+                    t_min = dataloader.dataset.dataset.a_t1 if intervene_var=='t1' else dataloader.dataset.dataset.a_t2
+                    t_max = dataloader.dataset.dataset.b_t1 if intervene_var=='t1' else dataloader.dataset.dataset.b_t2
+                    delta_t = delta_t * (t_max - t_min) + t_min
+                     
+                delta_y, delta_d, _, _ = reverse_scaling(args.scaling, delta_y, y, dataloader.dataset.dataset.a_y, dataloader.dataset.dataset.b_y, dataloader.dataset.dataset.a_d, dataloader.dataset.dataset.b_d)
+        
+                for i in range(delta_y.size(0)):
+                    data_points_y.append((delta_t[i].item(), delta_y[i].item()))
+                    data_points_d.append((delta_t[i].item(), delta_d[i].item()))
+    
+    def calculate_gradients_and_effect(data_points, method='coef', pehe=True):
+        del_t = data_points[:, 0]  # delta_t
+        del_var = data_points[:, 1]  # delta_y / delta_d
+
+        non_zero_indices = del_t != 0
+        del_t = del_t[non_zero_indices]
+        del_var = del_var[non_zero_indices]
+    
+        true_ite = 1.789
+        if not pehe:
+            gradients = abs((del_var / del_t) - true_ite)#**2
+        else:
+            gradients = ((del_var / del_t) - true_ite)**2
+        if method == 'grad':
+            model = LinearRegression()
+            model.fit(del_t.reshape(-1, 1), del_var)
+            treatment_effect = model.coef_[0]
+        elif method == 'mean':
+            treatment_effect = np.mean(gradients)
+            
+        return treatment_effect
+
+    ate_y = calculate_gradients_and_effect(np.array(data_points_y), method = 'mean', pehe=False)
+    pehe_y = math.sqrt(calculate_gradients_and_effect(np.array(data_points_y), method = 'mean', pehe=True))
+    # pehe_d = calculate_gradients_and_effect(np.array(data_points_d), method = 'mean')
+    
+    print(f"P error HE y : {pehe_y:.3f}, ATE error y : {ate_y:.3f}")
+
+    return pehe_y, ate_y
