@@ -3,7 +3,5 @@
 ## Overview
 This dataset comprises two real-world COVID-19 infection cluster datasets from distinct regional distributions, enriched with time-aligned public health intervention records (e.g., social distancing policies). The data was collected in collaboration with local governments, a medical university, and a hospital. These are the **first datasets** to directly connect infection dynamics with region-level policy interventions, providing a unique opportunity for causal and temporal modeling in public health research.
 
-### Access Policy  
-This dataset is currently under review and is not publicly released at this stage.  
-> 🔒 **Note:**  
-> It can be made available upon academic request for non-commercial research purposes.
+> 🔒 **Access Policy  **  
+> This dataset is currently under review and is not publicly released at this stage. Nevertheless, It can be made available upon academic request for non-commercial research purposes.
