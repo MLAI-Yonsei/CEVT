@@ -1,15 +1,11 @@
 # COVID-19 Time Series Infection Cluster Dataset
 
 ## Overview
-This dataset contains two real-world COVID-19 infection cluster datasets collected from distinct distributions, including social distancing policies (public health measures). The data was collected in collaboration with local governments, a medical university, and a hospital. These datasets are the first of their kind and provide unique opportunities to analyze the causal relationship between the spread of COVID-19 and public health measures.
+This dataset comprises two real-world COVID-19 infection cluster datasets from distinct regional distributions, enriched with time-aligned public health intervention records (e.g., social distancing policies). The data was collected in collaboration with local governments, a medical university, and a hospital. These are the **first datasets** to directly connect infection dynamics with region-level policy interventions, providing a unique opportunity for causal and temporal modeling in public health research.
 
-## Data Access
-This dataset is currently private and **_will be made available upon request for research and academic purposes._** Interested researchers may contact us through the information provided below.
+## Access Policy
+The dataset is currently **not publicly released** due to ongoing review and data-sharing regulations. However, **access may be granted upon request** for **non-commercial academic research** purposes, subject to ethical approval and a review of the research proposal.
 
-## Research Significance
-- First comprehensive dataset linking COVID-19 clusters with public health measures
-- Enables causal inference analysis between social distancing policies and infection spread
-- Supports research on the effectiveness of public health interventions
-- Facilitates the development of robust time-series models for medical contexts
+Researchers interested in using the dataset are invited to contact the authors via the email provided below. Priority will be given to proposals aligned with the study of causal inference, epidemiology, and public health interventions.
 
-*Note: This dataset is currently under review for publication. Access will be granted based on research merit and intended use. The dataset is particularly valuable for researchers working on causal inference in medical time series and public health policy evaluation.*
+> _Note: The dataset is part of a study currently under peer review. Data access requests will be considered based on research purpose and institutional affiliation._
