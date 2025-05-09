@@ -6,7 +6,6 @@ This repository is an official implementation of the paper "Causal Effect Variat
 ### Overall Framework
 ![image](https://github.com/user-attachments/assets/6f753cc9-8288-4835-ae4f-9d31529f1463)
 
-<<<<<<< Updated upstream
 To mitigate the lack of medical data benchmarks, we utilized three approaches: 
 1) For the first time, we collected COVID-19 infection spread time series cluster data with social distancing.
 ![image](https://github.com/user-attachments/assets/7741cb96-6baa-4512-aef4-a440624012e8)
