@@ -1,6 +1,6 @@
-# Causal Effect Variational Transformer for Social Distancing and COVID-19 Infection Cluster Analysis
+# Causal Effect Variational Transformer for Public Health Measures and COVID-19 Infection Cluster Analysis
 
-This repository is an official implementation of the paper "Causal Effect Variational Transformer for Social Distancing and COVID-19 Infection Cluster Analysis" with Pytorch.
+This repository is an official implementation of the paper "Causal Effect Variational Transformer for Public Health Measures and COVID-19 Infection Cluster Analysis" with Pytorch.
 
 ## Visual Summary
 ### Overall Framework
