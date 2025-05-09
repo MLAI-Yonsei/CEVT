@@ -6,7 +6,7 @@ This repository is an official implementation of the paper "Causal Effect Variat
 ### Overall Framework
 ![image](https://github.com/user-attachments/assets/6f753cc9-8288-4835-ae4f-9d31529f1463)
 
-To mitigate the lack of medical data benchmarks, we utilized three approaches: 
+To address the limited availability of standardized medical benchmarks, we adopted the following three key strategies:
 1) For the first time, we collected real-world COVID-19 infection spread time series cluster data with social distancing across two distinct distributions.
 - Provincial COVID-19 Data
 ![image](https://github.com/user-attachments/assets/ae1a22f7-fc8c-4d34-aac5-bfd56baa0306)
