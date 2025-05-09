@@ -6,9 +6,36 @@ This repository is an official implementation of the paper "Causal Effect Variat
 ### Overall Framework
 ![image](https://github.com/user-attachments/assets/6f753cc9-8288-4835-ae4f-9d31529f1463)
 
+<<<<<<< Updated upstream
 To mitigate the lack of medical data benchmarks, we utilized three approaches: 
 1) For the first time, we collected COVID-19 infection spread time series cluster data with social distancing.
 ![image](https://github.com/user-attachments/assets/7741cb96-6baa-4512-aef4-a440624012e8)
+=======
+### Project Tree
+```
+├── data
+│   ├── data_cut_0.csv # <provincial> cut-off 1~5
+│   ├── data_cut_1.csv
+│   ├── data_cut_2.csv
+│   ├── data_cut_3.csv
+│   ├── data_cut_4.csv
+│   ├── data_cut_5.csv
+│   ├── data_final_mod.csv
+│   ├── data_mod.ipynb
+│   ├── data_task.csv
+│   └── municipal # <municipal>
+│       └── preprocessed_incheon_98.csv
+├── sh
+│   ├── provincial.sh
+│   └── municipal.sh
+├── main.py
+├── run_causal.py
+├── run_itransformer.py
+├── models.py
+├── utils.py
+└── README.md
+```
+>>>>>>> Stashed changes
 
 2) To solve data scarcity, we proposed and utilized a cut-off data augmentation algorithm.
 ![image](https://github.com/user-attachments/assets/5fccd5c4-2192-4dca-9aa9-f0031b61430f)
