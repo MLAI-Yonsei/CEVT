@@ -4,7 +4,7 @@
 This dataset contains two real-world COVID-19 infection cluster datasets collected from distinct distributions, including social distancing policies (public health measures). The data was collected in collaboration with local governments, a medical university, and a hospital. These datasets are the first of their kind and provide unique opportunities to analyze the causal relationship between the spread of COVID-19 and public health measures.
 
 ## Data Access
-This dataset is currently private and **will be made available upon request for research and academic purposes.** Interested researchers may contact us through the information provided below.
+This dataset is currently private and **_will be made available upon request for research and academic purposes._** Interested researchers may contact us through the information provided below.
 
 ## Research Significance
 - First comprehensive dataset linking COVID-19 clusters with public health measures
