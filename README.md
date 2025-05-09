@@ -17,7 +17,7 @@ To mitigate the lack of medical data benchmarks, we utilized three approaches:
 ![image](https://github.com/user-attachments/assets/251e8b29-a490-4b40-bb57-4a783424cc20)
 
 ## Abstract
-Recent research focuses on integrating causal inference into deep learning models to enhance the explainability and robustness of sensitive data such as medical records. However, due to high privacy concerns and the cost of collecting medical data, there is a lack of benchmark datasets. Additionally, the available datasets are sparse, and prior research lacks sufficient modeling of causal relationships in medical time series. Therefore, 1) we collected real-world datasets and 2) proposed effective data augmentation methods, 3) introduced a Structural Causal Model (SCM) that considers latent confounder. First, to validate the applicability to real-world scenarios, we collected COVID-19 infection cluster data with social distancing measures for the first time. This provides new data that can analyze the relationship between the spread of COVID-19 and social distancing policies. Second, we propose a cut-off augmentation as a solution to data scarcity. The cut-off algorithm augments feature and label pairs, theoretically demonstrating that it enhances the robustness in terms of the generalization bound. Lastly, we introduce the Causal Effect Variational Transformer (CEVT), a Transformer-based causal model that effectively captures time-series features and considers latent confounder and multiple treatments. CEVT enhances the prediction accuracy of the causal impact of social distancing on COVID-19 cases and infection cluster duration outperforming baseline models. It also effectively infers the causal relationship between social distancing and infection spread.
+Recent research focuses on integrating causal inference into deep learning models to enhance the explainability and robustness of medical contexts. However, privacy concerns and the high cost of data collection pose challenges, causing data scarcity and insufficient modeling of medical time series. To address these challenges, we collected two real-world COVID-19 infection cluster datasets from distinct distributions, including social distancing policies, in collaboration with local governments, a medical university, and a hospital. These datasets are the first of their kind and open up new opportunities to analyze the causal relationship between the spread of COVID-19 and public health measures. We also proposed a cut-off augmentation to mitigate data scarcity by augmenting feature-label pairs, which theoretically improves robustness in terms of generalization bounds. Lastly, we introduced the Causal Effect Variational Transformer (CEVT), a Transformer-based causal model that effectively captures time-series features while accounting for latent confounders and multiple treatments. CEVT improves the prediction accuracy of the causal impact of public health measures on COVID-19 case counts and infection cluster duration, outperforming baseline models. Moreover, the magnitude of causal effects estimated by CEVT is consistent with previous findings examining the relationship between public health measures and infection spread, further supporting the reliability of CEVT.
 
 ## Implement Code Example
 
@@ -59,5 +59,7 @@ To install overall packages and reproduce the best model, please run the codes b
 ```
 pip install -r requirements.txt
 
-bash sh/bestmodel_bash.sh
+bash sh/provincial_best.sh
+bash sh/municipal_best.sh
+
 ```
