@@ -8,7 +8,12 @@ This repository is an official implementation of the paper "Causal Effect Variat
 
 To mitigate the lack of medical data benchmarks, we utilized three approaches: 
 1) For the first time, we collected real-world COVID-19 infection spread time series cluster data with social distancing across two distinct distributions.
-![image](https://github.com/user-attachments/assets/7741cb96-6baa-4512-aef4-a440624012e8)
+- Provincial COVID-19 Data
+![image](https://github.com/user-attachments/assets/ae1a22f7-fc8c-4d34-aac5-bfd56baa0306)
+
+- Municipal COVID-19 Data
+![image](https://github.com/user-attachments/assets/3981dff2-5786-42e4-9449-a866de12c3a4)
+
 
 2) To solve data scarcity, we proposed and utilized a cut-off data augmentation algorithm.
 ![image](https://github.com/user-attachments/assets/5fccd5c4-2192-4dca-9aa9-f0031b61430f)
