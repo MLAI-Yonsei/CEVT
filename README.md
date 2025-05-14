@@ -18,9 +18,11 @@ To address the limited availability of standardized medical benchmarks, we adopt
 
 
 2) To solve data scarcity, we proposed and utilized a cut-off data augmentation algorithm.
+
 ![image](https://github.com/user-attachments/assets/5fccd5c4-2192-4dca-9aa9-f0031b61430f)
 
-3) To effectively utilize the data, we proposed a Causal Effect Variational Transformer (CEVT) to model the causal relationship between core variables.
+4) To effectively utilize the data, we proposed a Causal Effect Variational Transformer (CEVT) to model the causal relationship between core variables.
+
 ![image](https://github.com/user-attachments/assets/251e8b29-a490-4b40-bb57-4a783424cc20)
 
 ## Abstract
