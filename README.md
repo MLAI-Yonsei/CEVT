@@ -3,6 +3,17 @@
 This repository contains the official PyTorch implementation of CIKM 2025 paper:
 "Causal Effect Variational Transformer for Public Health Measures and COVID-19 Infection Cluster Analysis".
 
+Please use BibTeX below to cite.
+'''
+@inproceedings{kang2025causal,
+  title={Causal Effect Variational Transformer for Public Health Measures and COVID-19 Infection Cluster Analysis},
+  author={Kang, Jinho and Lim, Sungjun and Park, Hojun and Jung, Jiyoung and Jung, Jaehun and Song, Kyungwoo},
+  booktitle={Proceedings of the 34th ACM International Conference on Information and Knowledge Management},
+  pages={1282--1291},
+  year={2025}
+}
+'''
+
 ## Visual Summary
 ### Overall Framework
 ![image](https://github.com/user-attachments/assets/6f753cc9-8288-4835-ae4f-9d31529f1463)
